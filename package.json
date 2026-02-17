@@ -1,0 +1,31 @@
+{
+  "name": "virgin-atlantic-optimizer",
+  "version": "1.0.0",
+  "description": "Virgin Atlantic Reward Return Optimizer - CLI tool for finding optimal reward flights",
+  "main": "dist/cli.js",
+  "scripts": {
+    "compile": "tsc",
+    "build": "npm run compile && node dist/cli.js build",
+    "start": "node dist/cli.js",
+    "scrape": "npm run compile && node dist/cli.js scrape",
+    "process": "npm run compile && node dist/cli.js process",
+    "all": "npm run compile && node dist/cli.js all",
+    "dev": "npm run all"
+  },
+  "keywords": [
+    "virgin-atlantic",
+    "rewards",
+    "flights",
+    "scraper"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "eta": "^3.5.0",
+    "playwright": "^1.40.0"
+  }
+}

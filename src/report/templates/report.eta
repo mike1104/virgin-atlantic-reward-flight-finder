@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virgin Atlantic Reward Flights</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Virgin Atlantic Reward Flights</h1>
+      <p><a href="https://www.virginatlantic.com/reward-flight-finder" target="_blank" rel="noopener noreferrer" class="external-link finder-link">Go to the Official Reward Seat Checker</a></p>
+    </header>
+
+    <div class="filters-shell">
+      <button type="button" class="filters-toggle" aria-expanded="true">
+        <span>Filters</span>
+      </button>
+      <div class="global-filters">
+        <div class="filters-row filters-row-primary">
+          <div class="filter-section">
+            <span class="filter-label">Destinations:</span>
+            <div class="dest-multiselect">
+              <button type="button" class="dest-toggle">All destinations selected</button>
+              <div class="dest-dropdown">
+                <div class="dest-actions">
+                  <button type="button" class="dest-select-all">Select All</button>
+                  <button type="button" class="dest-select-none">Select None</button>
+                </div>
+                <% it.groupedDestinations.forEach(function(group) { %>
+                  <% if (it.destinationGroupsEnabled) { %>
+                    <div class="dest-group-label"><%= group.name %></div>
+                  <% } %>
+                  <% group.destinations.forEach(function(dest) { %>
+                    <label class="dest-option"><input type="checkbox" class="dest-cb" value="<%= dest.code %>" checked><span><%= dest.name %> (<%= dest.code %>)</span></label>
+                  <% }) %>
+                <% }) %>
+              </div>
+            </div>
+          </div>
+          <div class="filter-section">
+            <span class="filter-label">Date Range:</span>
+            <input type="date" class="date-input date-start">
+            <span class="range-separator">to</span>
+            <input type="date" class="date-input date-end">
+          </div>
+          <div class="filter-section">
+            <span class="filter-label">Nights:</span>
+            <input type="number" class="range-input nights-min" value="5" min="1" max="365">
+            <span class="range-separator">to</span>
+            <input type="number" class="range-input nights-max" value="12" min="1" max="365">
+          </div>
+        </div>
+
+        <div class="filters-row filters-row-secondary">
+          <div class="filter-section">
+            <label class="filter-label">
+              Travellers:
+              <input type="number" class="range-input adults-count" value="2" min="1" max="9">
+            </label>
+          </div>
+          <div class="filter-section">
+            <label class="filter-label">
+              Cabin:
+              <select class="filter-select cabin-min"></select>
+            </label>
+          </div>
+        </div>
+
+        <div class="points-row">
+          <div class="filter-section">
+            <label class="filter-label">
+              Current Points Balance:
+              <input type="number" class="points-balance" placeholder="0" min="0" step="1000">
+            </label>
+          </div>
+          <div class="filter-section">
+            <label class="filter-label">
+              Bonus Points:
+              <input type="number" class="range-input bonus-rate" value="0" min="0" max="100" step="5">%
+            </label>
+          </div>
+          <div class="filter-section">
+            <label class="filter-checkbox">
+              <input type="checkbox" class="show-over-max" checked>
+              <span>Show options above max top-up</span>
+            </label>
+          </div>
+          <div class="filter-section">
+            <a href="https://vaabrowse.virginatlantic.com/gh/en/flying-club/earn-points/buy-points.html" target="_blank" rel="noopener noreferrer" class="external-link buy-points-link">Buy Virgin Points</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="results-area">
+      <p class="summary"><span class="combo-count">0</span> return options found (<span class="visible-count">0</span> visible, showing <span class="page-range">0</span>)</p>
+      <div class="table-scroll">
+        <table class="results-table">
+          <thead>
+            <tr>
+              <th class="sortable" data-column="dest">Dest</th>
+              <th class="sortable" data-column="depart">Depart</th>
+              <th class="sortable" data-column="return">Return</th>
+              <th class="sortable" data-column="nights">Nights</th>
+              <th class="sortable" data-column="cabin">Cabin</th>
+              <th class="sortable" data-column="remainingSeats">Seats</th>
+              <th class="sortable" data-column="scrapedAt">Last Updated</th>
+              <th class="sortable" data-column="taxesFees">Est. Taxes/Fees</th>
+              <th class="sortable" data-column="totalPoints">Points</th>
+              <th class="sortable" data-column="topUpCost">Top-Up Cost</th>
+              <th>Book</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="pagination-controls">
+        <div class="pagination-info">
+          <label>Rows per page:
+            <select class="rows-per-page">
+              <option value="50">50</option>
+              <option value="100" selected>100</option>
+              <option value="200">200</option>
+              <option value="500">500</option>
+              <option value="9999999">All</option>
+            </select>
+          </label>
+        </div>
+        <div class="pagination-buttons">
+          <button class="page-btn prev-btn" disabled>\u2190 Previous</button>
+          <span class="page-numbers"></span>
+          <button class="page-btn next-btn">Next \u2192</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="flights-data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
