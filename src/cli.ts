@@ -24,8 +24,8 @@ type CliOptions = {
 
 const SCRAPE_METADATA_CACHE = "scrape-metadata.json";
 const FLIGHTS_DATASET_CACHE = "flights-dataset.json";
-const OUTPUT_FLIGHTS_DATA_FILE = "flights-data.js";
-const OUTPUT_REPORT_FILE = "report.html";
+const OUTPUT_FLIGHTS_DATA_FILE = "flights-data.json";
+const OUTPUT_REPORT_FILE = "index.html";
 
 function getPositiveIntEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -138,30 +138,6 @@ function ensureScrapeTimestampsInDestinationData(
   });
 
   return mutated;
-}
-
-function buildDestinationMaps(destinations: Destination[]): {
-  names: Map<string, string>;
-  groups: Map<string, string>;
-} {
-  const names = new Map<string, string>();
-  const groups = new Map<string, string>();
-
-  destinations.forEach((dest) => {
-    names.set(dest.code, dest.name || dest.code);
-    if (dest.group) groups.set(dest.code, dest.group);
-  });
-
-  return { names, groups };
-}
-
-function filterManifestDestinations(
-  manifest: ScrapeManifest,
-  requestedDestinations: string[]
-): Destination[] {
-  if (requestedDestinations.length === 0) return manifest.destinations;
-  const requested = new Set(requestedDestinations);
-  return manifest.destinations.filter((d) => requested.has(d.code));
 }
 
 function filterDestinationData(
@@ -325,30 +301,9 @@ async function processCommand(args: string[]): Promise<void> {
   console.log(`🧱 Processed data file written for ${filteredDestinationData.size} destinations: output/${OUTPUT_FLIGHTS_DATA_FILE}\n`);
 }
 
-function buildCommand(args: string[]): void {
+function buildCommand(): void {
   ensureDirs();
-  const options = parseCliOptions(args);
-
-  const manifest = loadScrapeMetadata();
-  if (!manifest) {
-    console.error("❌ No scrape metadata found. Run 'scrape' or 'process' first.");
-    process.exit(1);
-  }
-
-  const selectedDestinations = filterManifestDestinations(manifest, options.requestedDestinations);
-  if (selectedDestinations.length === 0) {
-    console.error("❌ No destinations available for build.");
-    process.exit(1);
-  }
-
-  const destinationCodes = selectedDestinations.map((d) => d.code);
-  const maps = buildDestinationMaps(selectedDestinations);
-  buildReportShell(
-    destinationCodes,
-    OUTPUT_REPORT_FILE,
-    maps.names,
-    maps.groups.size > 0 ? maps.groups : undefined
-  );
+  buildReportShell(OUTPUT_REPORT_FILE);
   console.log(`\nReport shell generated: output/${OUTPUT_REPORT_FILE}`);
   console.log("✅ Build complete.\n");
 }
@@ -360,16 +315,7 @@ async function allCommand(args: string[]): Promise<void> {
   const scraped = await scrapeToCache(options.requestedDestinations, options.noCache);
   const filteredDestinationData = filterDestinationData(scraped.destinationData, options.requestedDestinations);
   writeReportData(filteredDestinationData, OUTPUT_FLIGHTS_DATA_FILE);
-
-  const selectedDestinations = filterManifestDestinations(scraped.manifest, options.requestedDestinations);
-  const destinationCodes = selectedDestinations.map((d) => d.code);
-  const maps = buildDestinationMaps(selectedDestinations);
-  buildReportShell(
-    destinationCodes,
-    OUTPUT_REPORT_FILE,
-    maps.names,
-    maps.groups.size > 0 ? maps.groups : undefined
-  );
+  buildReportShell(OUTPUT_REPORT_FILE);
 
   console.log(`\nReport generated: output/${OUTPUT_REPORT_FILE}`);
   console.log("✅ Done! Open output/" + OUTPUT_REPORT_FILE + " in your browser.\n");
@@ -392,7 +338,7 @@ async function main(): Promise<void> {
       await processCommand(commandArgs);
       break;
     case "build":
-      buildCommand(commandArgs);
+      buildCommand();
       break;
     case "all":
       await allCommand(commandArgs);

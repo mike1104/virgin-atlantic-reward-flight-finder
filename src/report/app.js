@@ -1,4 +1,4 @@
-// RAW_DATA is injected by the report generator via flights-data.js
+var RAW_DATA = {};
 
 // ===== Utility functions =====
 function addDays(dateStr, days) {
@@ -819,8 +819,20 @@ function invalidateAndRender() {
   render();
 }
 
-// ===== Initialise on DOM ready =====
-document.addEventListener('DOMContentLoaded', function() {
+function populateDestinations() {
+  var destList = document.querySelector('.dest-list');
+  if (!destList) return;
+  var codes = Object.keys(RAW_DATA).sort();
+  var html = '';
+  for (var i = 0; i < codes.length; i++) {
+    var code = codes[i];
+    html += '<label class="dest-option"><input type="checkbox" class="dest-cb" value="' + code + '" checked><span>' + code + '</span></label>';
+  }
+  destList.innerHTML = html;
+}
+
+function initApp() {
+  populateDestinations();
   populateCabinMinControl();
 
   var dateBounds = getOutboundDateBounds();
@@ -956,4 +968,18 @@ document.addEventListener('DOMContentLoaded', function() {
 
   // Initial render
   render();
+}
+
+// ===== Initialise on DOM ready =====
+document.addEventListener('DOMContentLoaded', function() {
+  fetch('flights-data.json')
+    .then(function(res) { return res.json(); })
+    .then(function(data) {
+      RAW_DATA = data;
+      initApp();
+    })
+    .catch(function(err) {
+      console.error('Failed to load flight data:', err);
+      document.querySelector('.summary').textContent = 'Failed to load flight data.';
+    });
 });

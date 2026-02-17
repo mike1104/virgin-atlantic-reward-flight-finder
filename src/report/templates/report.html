@@ -28,14 +28,7 @@
                   <button type="button" class="dest-select-all">Select All</button>
                   <button type="button" class="dest-select-none">Select None</button>
                 </div>
-                <% it.groupedDestinations.forEach(function(group) { %>
-                  <% if (it.destinationGroupsEnabled) { %>
-                    <div class="dest-group-label"><%= group.name %></div>
-                  <% } %>
-                  <% group.destinations.forEach(function(dest) { %>
-                    <label class="dest-option"><input type="checkbox" class="dest-cb" value="<%= dest.code %>" checked><span><%= dest.name %> (<%= dest.code %>)</span></label>
-                  <% }) %>
-                <% }) %>
+                <div class="dest-list"></div>
               </div>
             </div>
           </div>
@@ -137,7 +130,6 @@
     </div>
   </div>
 
-  <script src="flights-data.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

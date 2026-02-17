@@ -33,6 +33,12 @@ jobs:
       - name: Build report shell
         run: node dist/cli.js build
 
+      - name: Restore flight data
+        uses: actions/cache/restore@v4
+        with:
+          path: output/flights-data.json
+          key: flights-data
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:

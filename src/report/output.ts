@@ -1,24 +1,12 @@
 import * as fs from "fs";
 import * as path from "path";
-import { Eta } from "eta";
 import { MonthData } from "../types";
 import { writeOutput } from "../utils/cache";
 
-type DestinationOption = {
-  code: string;
-  name: string;
-  group: string;
-};
-
-type DestinationGroup = {
-  name: string;
-  destinations: DestinationOption[];
-};
-
 function loadReportTemplate(): string {
   const candidates = [
-    path.resolve(__dirname, "templates/report.eta"),
-    path.resolve(__dirname, "../../src/report/templates/report.eta"),
+    path.resolve(__dirname, "templates/report.html"),
+    path.resolve(__dirname, "../../src/report/templates/report.html"),
   ];
 
   for (const templatePath of candidates) {
@@ -27,42 +15,7 @@ function loadReportTemplate(): string {
     }
   }
 
-  throw new Error("Could not find report template file (report.eta)");
-}
-
-function buildDestinationGroups(
-  destinations: string[],
-  destinationNames?: Map<string, string>,
-  destinationGroups?: Map<string, string>
-): DestinationGroup[] {
-  const options: DestinationOption[] = destinations.map(code => ({
-    code,
-    name: destinationNames?.get(code) || code,
-    group: destinationGroups?.get(code) || "Other",
-  }));
-
-  if (!destinationGroups || destinationGroups.size === 0) {
-    return [
-      {
-        name: "",
-        destinations: options,
-      },
-    ];
-  }
-
-  const grouped = new Map<string, DestinationOption[]>();
-  for (const option of options) {
-    const list = grouped.get(option.group) || [];
-    list.push(option);
-    grouped.set(option.group, list);
-  }
-
-  return Array.from(grouped.entries())
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([groupName, groupDestinations]) => ({
-      name: groupName,
-      destinations: groupDestinations,
-    }));
+  throw new Error("Could not find report template file (report.html)");
 }
 
 function mergeMonthData(monthDataArray: MonthData[]): MonthData {
@@ -115,42 +68,26 @@ function buildRawData(destinationData: DestinationDataMap): Record<string, { out
 
 export function writeReportData(
   destinationData: DestinationDataMap,
-  outputDataFilename: string = "flights-data.js"
+  outputDataFilename: string = "flights-data.json"
 ): void {
   const rawData = buildRawData(destinationData);
-  writeOutput(outputDataFilename, `var RAW_DATA = ${JSON.stringify(rawData)};\n`);
+  writeOutput(outputDataFilename, JSON.stringify(rawData));
 }
 
 export function buildReportShell(
-  destinations: string[],
-  outputFilename: string = "report.html",
-  destinationNames?: Map<string, string>,
-  destinationGroups?: Map<string, string>
+  outputFilename: string = "index.html"
 ): void {
-  const groupedDestinations = buildDestinationGroups(destinations.sort(), destinationNames, destinationGroups);
-  const eta = new Eta({ autoEscape: true });
-  const template = loadReportTemplate();
-  const html = eta.renderString(template, {
-    destinationGroupsEnabled: !!(destinationGroups && destinationGroups.size > 0),
-    groupedDestinations,
-  });
-
-  if (!html) {
-    throw new Error("Failed to render report HTML template");
-  }
-
   copyStaticAssets();
-  writeOutput(outputFilename, html);
+
+  const templateSrc = loadReportTemplate();
+  writeOutput(outputFilename, templateSrc);
 }
 
 export function generateReportArtifacts(
   destinationData: DestinationDataMap,
-  outputFilename: string = "report.html",
-  destinationNames?: Map<string, string>,
-  destinationGroups?: Map<string, string>
+  outputFilename: string = "index.html"
 ): void {
-  const destinations = Array.from(destinationData.keys());
-  writeReportData(destinationData, "flights-data.js");
-  buildReportShell(destinations, outputFilename, destinationNames, destinationGroups);
+  writeReportData(destinationData, "flights-data.json");
+  buildReportShell(outputFilename);
   console.log(`\nReport generated: output/${outputFilename}`);
 }
