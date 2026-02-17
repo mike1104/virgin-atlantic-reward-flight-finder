@@ -6,6 +6,14 @@ import { readCache, writeCache, cacheExists, getCachePath } from "../utils/cache
 const ORIGIN = "LHR";
 const CACHE_MAX_AGE_MS = 60 * 60 * 1000; // 1 hour
 
+function getPositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 1) return fallback;
+  return parsed;
+}
+
 function getMonthCacheFilename(
   dest: string,
   direction: "outbound" | "inbound",
@@ -221,8 +229,9 @@ export async function scrapeAllMonths(
     requests.push({ type: 'inbound', index, month: m.month, year: m.year });
   });
 
-  // Process in batches of 4 to avoid overwhelming the server
-  const BATCH_SIZE = 4;
+  // Higher parallelism with tunable caps.
+  const BATCH_SIZE = getPositiveIntEnv("VA_MONTH_REQUEST_CONCURRENCY", 8);
+  const BATCH_DELAY_MS = getPositiveIntEnv("VA_MONTH_BATCH_DELAY_MS", 150);
   const outboundResults: MonthData[] = new Array(months.length);
   const inboundResults: MonthData[] = new Array(months.length);
 
@@ -249,9 +258,9 @@ export async function scrapeAllMonths(
 
     await Promise.all(batchPromises);
 
-    // Small delay between batches to be respectful
+    // Small delay between batches to reduce burst pressure.
     if (i + BATCH_SIZE < requests.length) {
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise(resolve => setTimeout(resolve, BATCH_DELAY_MS));
     }
   }
 

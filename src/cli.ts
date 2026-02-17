@@ -27,6 +27,14 @@ const FLIGHTS_DATASET_CACHE = "flights-dataset.json";
 const OUTPUT_FLIGHTS_DATA_FILE = "flights-data.js";
 const OUTPUT_REPORT_FILE = "report.html";
 
+function getPositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 1) return fallback;
+  return parsed;
+}
+
 function normalizeYearMonths(months: YearMonth[]): YearMonth[] {
   const uniq = new Set<string>();
   const normalized: YearMonth[] = [];
@@ -48,6 +56,14 @@ function normalizeYearMonths(months: YearMonth[]): YearMonth[] {
 
   normalized.sort((a, b) => `${a.year}-${a.month}`.localeCompare(`${b.year}-${b.month}`));
   return normalized;
+}
+
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes === 0) return `${seconds}s`;
+  return `${minutes}m ${seconds}s`;
 }
 
 function printUsage(): void {
@@ -179,6 +195,7 @@ async function scrapeToCache(
   requestedDestinations: string[],
   forceFresh: boolean
 ): Promise<{ manifest: ScrapeManifest; destinationData: Map<string, { outbound: MonthData[]; inbound: MonthData[] }> }> {
+  const scrapeStartedAt = Date.now();
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
 
@@ -215,7 +232,7 @@ async function scrapeToCache(
     );
 
     const destinationData = new Map<string, { outbound: MonthData[]; inbound: MonthData[] }>();
-    const DEST_BATCH_SIZE = 2;
+    const DEST_BATCH_SIZE = getPositiveIntEnv("VA_DESTINATION_CONCURRENCY", 6);
 
     for (let i = 0; i < targetDestinations.length; i += DEST_BATCH_SIZE) {
       const batch = targetDestinations.slice(i, i + DEST_BATCH_SIZE);
@@ -265,6 +282,8 @@ async function scrapeToCache(
     writeCache(SCRAPE_METADATA_CACHE, manifest);
     writeCache(FLIGHTS_DATASET_CACHE, serializeDestinationData(destinationData));
 
+    const elapsedMs = Date.now() - scrapeStartedAt;
+    console.log(`\n⏱️ Total scrape time: ${formatDuration(elapsedMs)} (${elapsedMs}ms)`);
     return { manifest, destinationData };
   } finally {
     await browser.close();
