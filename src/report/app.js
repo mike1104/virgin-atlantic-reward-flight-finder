@@ -574,7 +574,7 @@ function render() {
         '\nBalance: ' + formatPoints(balance) + ' pts' +
         '\nSurplus: ' + formatPoints(surplus) + ' pts' +
         '\n\nMax purchasable: ' + formatPoints(MAX_BASE) + ' base pts across ' + accountsLabel;
-      topUpHtml = '<td class="top-up-cost" style="' + barStyle + 'color:#28a745;font-weight:500" title="' + escapeAttr(tooltip) + '">\u2713 Enough</td>';
+      topUpHtml = '<td class="top-up-cost" style="' + barStyle + 'color:var(--color-success);font-weight:500" title="' + escapeAttr(tooltip) + '">\u2713 Enough</td>';
     } else if (!canAfford) {
       var cappedBase = MAX_BASE;
       var pointsCost = (cappedBase / 1000) * 15;
@@ -592,7 +592,7 @@ function render() {
         '\nFees: \u00A3' + fees.toFixed(2) +
         '\nTotal: \u00A3' + totalCost.toFixed(2) +
         '\nShortfall: ' + formatPoints(pointsNeeded - effectivePts) + ' pts';
-      topUpHtml = '<td class="top-up-cost" style="' + barStyle + 'color:#E0001A;font-weight:500" title="' + escapeAttr(tooltip) + '">\u00A3' + totalCost.toFixed(2) + '+</td>';
+      topUpHtml = '<td class="top-up-cost" style="' + barStyle + 'color:var(--color-primary);font-weight:500" title="' + escapeAttr(tooltip) + '">\u00A3' + totalCost.toFixed(2) + '+</td>';
     } else {
       var numTransactions = Math.ceil(baseToBuy / ACCOUNT_CAP);
       var pointsCost = (baseToBuy / 1000) * 15;

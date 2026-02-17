@@ -29,7 +29,7 @@ function mergeMonthData(monthDataArray: MonthData[]): MonthData {
 }
 
 function copyStaticAssets(): void {
-  const staticFiles = ["style.css", "app.js"];
+  const staticFiles = ["style.css", "app.js", "favicon.svg"];
 
   // At runtime __dirname is dist/report/. Source assets live in src/report/.
   const candidates = [
