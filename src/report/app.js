@@ -1,4 +1,5 @@
 var RAW_DATA = {};
+var DESTINATIONS_META = [];
 
 // ===== Utility functions =====
 function addDays(dateStr, days) {
@@ -38,6 +39,10 @@ function formatCurrencyGBP(n) {
 
 function escapeAttr(str) {
   return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function escapeHtml(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function parseIsoDateInput(value) {
@@ -822,11 +827,46 @@ function invalidateAndRender() {
 function populateDestinations() {
   var destList = document.querySelector('.dest-list');
   if (!destList) return;
-  var codes = Object.keys(RAW_DATA).sort();
+  var codes = Object.keys(RAW_DATA);
+  var metadataByCode = {};
+  for (var i = 0; i < DESTINATIONS_META.length; i++) {
+    var item = DESTINATIONS_META[i];
+    if (!item || !item.code) continue;
+    metadataByCode[item.code] = item;
+  }
+
+  var groups = {};
+  for (var ci = 0; ci < codes.length; ci++) {
+    var code = codes[ci];
+    var meta = metadataByCode[code] || {};
+    var group = meta.group || 'Other';
+    if (!groups[group]) groups[group] = [];
+    groups[group].push({
+      code: code,
+      label: meta.name ? (meta.name + ' (' + code + ')') : code
+    });
+  }
+
+  var groupNames = Object.keys(groups).sort(function(a, b) {
+    if (a === 'Other') return 1;
+    if (b === 'Other') return -1;
+    return a.localeCompare(b);
+  });
+
   var html = '';
-  for (var i = 0; i < codes.length; i++) {
-    var code = codes[i];
-    html += '<label class="dest-option"><input type="checkbox" class="dest-cb" value="' + code + '" checked><span>' + code + '</span></label>';
+  for (var gi = 0; gi < groupNames.length; gi++) {
+    var groupName = groupNames[gi];
+    html += '<div class="dest-group-label">' + escapeHtml(groupName) + '</div>';
+
+    groups[groupName].sort(function(a, b) {
+      return a.label.localeCompare(b.label);
+    });
+
+    for (var di = 0; di < groups[groupName].length; di++) {
+      var dest = groups[groupName][di];
+      html += '<label class="dest-option"><input type="checkbox" class="dest-cb" value="' +
+        escapeAttr(dest.code) + '" checked><span>' + escapeHtml(dest.label) + '</span></label>';
+    }
   }
   destList.innerHTML = html;
 }
@@ -972,14 +1012,25 @@ function initApp() {
 
 // ===== Initialise on DOM ready =====
 document.addEventListener('DOMContentLoaded', function() {
-  fetch('flights-data.json')
-    .then(function(res) { return res.json(); })
-    .then(function(data) {
-      RAW_DATA = data;
+  Promise.all([
+    fetch('flights-data.json').then(function(res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    }),
+    fetch('destinations.json')
+      .then(function(res) {
+        if (!res.ok) return [];
+        return res.json();
+      })
+      .catch(function() { return []; })
+  ])
+    .then(function(results) {
+      RAW_DATA = results[0] || {};
+      DESTINATIONS_META = Array.isArray(results[1]) ? results[1] : [];
       initApp();
     })
-    .catch(function(err) {
-      console.error('Failed to load flight data:', err);
-      document.querySelector('.summary').textContent = 'Failed to load flight data.';
+    .catch(function() {
+      document.querySelector('.results-area').innerHTML =
+        '<p class="no-data-message">No flight data available yet. Run a scrape first or wait for the next scheduled update.</p>';
     });
 });

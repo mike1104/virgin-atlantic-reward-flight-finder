@@ -3,7 +3,7 @@
 import { chromium } from "playwright";
 import { scrapeAllMonths } from "./scrape/month";
 import { scrapeDestinations } from "./scrape/destinations";
-import { buildReportShell, writeReportData } from "./report/output";
+import { buildReportShell, writeDestinationMetadata, writeReportData } from "./report/output";
 import { ensureDirs, readCache, writeCache } from "./utils/cache";
 import { getNext12Months } from "./utils/dates";
 import { Destination, MonthData, YearMonth } from "./types";
@@ -25,6 +25,7 @@ type CliOptions = {
 const SCRAPE_METADATA_CACHE = "scrape-metadata.json";
 const FLIGHTS_DATASET_CACHE = "flights-dataset.json";
 const OUTPUT_FLIGHTS_DATA_FILE = "flights-data.json";
+const OUTPUT_DESTINATIONS_FILE = "destinations.json";
 const OUTPUT_REPORT_FILE = "index.html";
 
 function getPositiveIntEnv(name: string, fallback: number): number {
@@ -151,6 +152,14 @@ function filterDestinationData(
     if (requested.has(code)) filtered.set(code, value);
   });
   return filtered;
+}
+
+function filterDestinationsMetadata(
+  destinations: Destination[],
+  destinationData: Map<string, { outbound: MonthData[]; inbound: MonthData[] }>
+): Destination[] {
+  const available = new Set(destinationData.keys());
+  return destinations.filter((destination) => available.has(destination.code));
 }
 
 function loadDestinationDataFromCache(manifest: ScrapeManifest): Map<string, { outbound: MonthData[]; inbound: MonthData[] }> {
@@ -298,6 +307,10 @@ async function processCommand(args: string[]): Promise<void> {
   }
 
   writeReportData(filteredDestinationData, OUTPUT_FLIGHTS_DATA_FILE);
+  if (manifest) {
+    const filteredDestinations = filterDestinationsMetadata(manifest.destinations, filteredDestinationData);
+    writeDestinationMetadata(filteredDestinations, OUTPUT_DESTINATIONS_FILE);
+  }
   console.log(`🧱 Processed data file written for ${filteredDestinationData.size} destinations: output/${OUTPUT_FLIGHTS_DATA_FILE}\n`);
 }
 
@@ -315,6 +328,8 @@ async function allCommand(args: string[]): Promise<void> {
   const scraped = await scrapeToCache(options.requestedDestinations, options.noCache);
   const filteredDestinationData = filterDestinationData(scraped.destinationData, options.requestedDestinations);
   writeReportData(filteredDestinationData, OUTPUT_FLIGHTS_DATA_FILE);
+  const filteredDestinations = filterDestinationsMetadata(scraped.manifest.destinations, filteredDestinationData);
+  writeDestinationMetadata(filteredDestinations, OUTPUT_DESTINATIONS_FILE);
   buildReportShell(OUTPUT_REPORT_FILE);
 
   console.log(`\nReport generated: output/${OUTPUT_REPORT_FILE}`);

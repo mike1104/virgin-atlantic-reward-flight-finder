@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import { MonthData } from "../types";
+import { Destination, MonthData } from "../types";
 import { writeOutput } from "../utils/cache";
 
 function loadReportTemplate(): string {
@@ -54,6 +54,7 @@ function copyStaticAssets(): void {
 }
 
 type DestinationDataMap = Map<string, { outbound: MonthData[]; inbound: MonthData[] }>;
+type DestinationMeta = Pick<Destination, "code" | "name" | "group">;
 
 function buildRawData(destinationData: DestinationDataMap): Record<string, { outbound: MonthData; inbound: MonthData }> {
   const rawData: Record<string, { outbound: MonthData; inbound: MonthData }> = {};
@@ -72,6 +73,13 @@ export function writeReportData(
 ): void {
   const rawData = buildRawData(destinationData);
   writeOutput(outputDataFilename, JSON.stringify(rawData));
+}
+
+export function writeDestinationMetadata(
+  destinations: DestinationMeta[],
+  outputMetadataFilename: string = "destinations.json"
+): void {
+  writeOutput(outputMetadataFilename, JSON.stringify(destinations));
 }
 
 export function buildReportShell(
