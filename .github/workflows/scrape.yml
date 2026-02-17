@@ -37,7 +37,7 @@ jobs:
         run: node dist/cli.js all
         env:
           VA_DESTINATION_CONCURRENCY: "1"
-          VA_MONTH_REQUEST_CONCURRENCY: "4"
+          VA_MONTH_REQUEST_CONCURRENCY: "12"
 
       - name: Cache flight data
         uses: actions/cache/save@v4
