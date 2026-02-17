@@ -230,7 +230,7 @@ export async function scrapeAllMonths(
   });
 
   // Higher parallelism with tunable caps.
-  const BATCH_SIZE = getPositiveIntEnv("VA_MONTH_REQUEST_CONCURRENCY", 8);
+  const BATCH_SIZE = getPositiveIntEnv("VA_MONTH_REQUEST_CONCURRENCY", 12);
   const BATCH_DELAY_MS = getPositiveIntEnv("VA_MONTH_BATCH_DELAY_MS", 150);
   const outboundResults: MonthData[] = new Array(months.length);
   const inboundResults: MonthData[] = new Array(months.length);

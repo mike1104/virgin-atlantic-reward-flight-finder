@@ -42,8 +42,10 @@ jobs:
       - name: Cache flight data
         uses: actions/cache/save@v4
         with:
-          path: output/flights-data.json
-          key: flights-data
+          path: |
+            output/flights-data.json
+            output/destinations.json
+          key: flights-data-${{ github.run_id }}
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

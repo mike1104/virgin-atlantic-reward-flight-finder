@@ -36,8 +36,11 @@ jobs:
       - name: Restore flight data
         uses: actions/cache/restore@v4
         with:
-          path: output/flights-data.json
-          key: flights-data
+          path: |
+            output/flights-data.json
+            output/destinations.json
+          key: flights-data-
+          restore-keys: flights-data-
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

@@ -217,7 +217,7 @@ async function scrapeToCache(
     );
 
     const destinationData = new Map<string, { outbound: MonthData[]; inbound: MonthData[] }>();
-    const DEST_BATCH_SIZE = getPositiveIntEnv("VA_DESTINATION_CONCURRENCY", 6);
+    const DEST_BATCH_SIZE = getPositiveIntEnv("VA_DESTINATION_CONCURRENCY", 1);
 
     for (let i = 0; i < targetDestinations.length; i += DEST_BATCH_SIZE) {
       const batch = targetDestinations.slice(i, i + DEST_BATCH_SIZE);
