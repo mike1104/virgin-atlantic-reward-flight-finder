@@ -3,6 +3,8 @@ import { Destination, YearMonth } from "../types";
 import { writeCache } from "../utils/cache";
 
 const DESTINATIONS_CACHE = "destinations.json";
+const DESTINATION_POPULATION_TIMEOUT_MS = 1500;
+const DESTINATION_POPULATION_POLL_MS = 100;
 
 function normalizeYearMonths(months: YearMonth[]): YearMonth[] {
   const uniq = new Set<string>();
@@ -28,50 +30,52 @@ function normalizeYearMonths(months: YearMonth[]): YearMonth[] {
 }
 
 async function extractAvailableMonths(page: Page): Promise<YearMonth[]> {
-  const hasMonthYearSelects = await page.evaluate(() => {
-    const month = document.querySelector("#month");
-    const year = document.querySelector("#year");
-    return !!month && !!year;
+  const dateMonths = await page.evaluate(() => {
+    const dateSelect = document.querySelector("#date") as HTMLSelectElement | null;
+    if (!dateSelect) return [];
+
+    return Array.from(dateSelect.options)
+      .map((option) => option.value.trim())
+      .map((value) => {
+        // Expected format: MM_YYYY (e.g. "02_2026")
+        const match = /^(\d{1,2})_(\d{4})$/.exec(value);
+        if (!match) return null;
+        return { month: match[1], year: match[2] };
+      })
+      .filter((item): item is { month: string; year: string } => item !== null);
   });
 
-  if (!hasMonthYearSelects) {
-    return [];
-  }
+  return normalizeYearMonths(dateMonths);
+}
 
-  const yearValues: string[] = await page.evaluate(() => {
-    const yearSelect = document.querySelector("#year") as HTMLSelectElement | null;
-    if (!yearSelect) return [];
-    return Array.from(yearSelect.options)
-      .map((opt) => opt.value.trim())
-      .filter((value) => /^\d{4}$/.test(value));
+function cleanLocationName(raw?: string): string | undefined {
+  if (!raw) return undefined;
+  const cleaned = raw.replace(/\s*\([A-Z]{3}\)\s*$/, "").trim();
+  return cleaned || undefined;
+}
+
+async function hasDestinationOptions(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const destSelect = document.querySelector("#destination") as HTMLSelectElement | null;
+    if (!destSelect) return false;
+    const realOptions = Array.from(destSelect.options).filter((option) => option.value.trim().length === 3);
+    return realOptions.length > 0;
   });
+}
 
-  const months: YearMonth[] = [];
-
-  for (const yearValue of yearValues) {
-    await page.selectOption("#year", yearValue);
-    await page.waitForTimeout(120);
-
-    const monthsForYear: string[] = await page.evaluate(() => {
-      const monthSelect = document.querySelector("#month") as HTMLSelectElement | null;
-      if (!monthSelect) return [];
-      return Array.from(monthSelect.options)
-        .map((opt) => opt.value.trim())
-        .filter((value) => /^\d{1,2}$/.test(value));
-    });
-
-    monthsForYear.forEach((month) => {
-      months.push({ month, year: yearValue });
-    });
+async function waitForDestinationOptions(page: Page): Promise<boolean> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < DESTINATION_POPULATION_TIMEOUT_MS) {
+    if (await hasDestinationOptions(page)) return true;
+    await page.waitForTimeout(DESTINATION_POPULATION_POLL_MS);
   }
-
-  return normalizeYearMonths(months);
+  return hasDestinationOptions(page);
 }
 
 export async function scrapeDestinations(
   page: Page
 ): Promise<Destination[]> {
-  console.log("Scraping destinations from Virgin Atlantic...");
+  console.log("Scraping routes from Virgin Atlantic...");
 
   try {
     await page.goto("https://www.virginatlantic.com/reward-flight-finder", {
@@ -90,89 +94,150 @@ export async function scrapeDestinations(
       // Cookie banner not present or already accepted
     }
 
-    // Wait for origin select to be ready
+    // Wait for route selectors to be ready.
     await page.waitForSelector("#origin", { timeout: 10000 });
+    await page.waitForSelector("#destination", { timeout: 10000 });
 
-    // Select LHR as origin - this populates the destination dropdown
-    await page.selectOption("#origin", "LHR");
-    console.log("  Selected LHR as origin");
+    const origins: Array<{ code: string; name: string; group?: string }> = await page.evaluate(() => {
+      const originSelect = document.querySelector("#origin") as HTMLSelectElement | null;
+      if (!originSelect) return [];
+      const origins: Array<{ code: string; name: string; group?: string }> = [];
+      const optgroups = originSelect.querySelectorAll("optgroup");
 
-    // Wait for destination dropdown to populate
-    await page.waitForFunction(() => {
-      const destSelect = document.querySelector("#destination") as HTMLSelectElement;
-      return destSelect && destSelect.options.length > 1;
-    }, { timeout: 10000 });
-
-    // Extract destinations from the #destination select
-    const destinations: Destination[] = await page.evaluate(() => {
-      const results: { code: string; name: string | undefined; group: string | undefined }[] = [];
-      const destSelect = document.querySelector("#destination") as HTMLSelectElement;
-      if (!destSelect) return results;
-
-      // Check for optgroups
-      const optgroups = destSelect.querySelectorAll("optgroup");
       if (optgroups.length > 0) {
-        optgroups.forEach((og) => {
-          const groupLabel = og.label;
-          Array.from(og.children).forEach((opt) => {
-            const option = opt as HTMLOptionElement;
-            if (option.value && option.value.length === 3) {
-              results.push({
-                code: option.value.toUpperCase(),
-                name: option.textContent?.trim(),
-                group: groupLabel || undefined,
-              });
-            }
+        optgroups.forEach((optgroup) => {
+          const groupLabel = (optgroup.label || "").trim() || undefined;
+          Array.from(optgroup.querySelectorAll("option")).forEach((optionEl) => {
+            const option = optionEl as HTMLOptionElement;
+            const code = option.value.trim().toUpperCase();
+            if (code.length !== 3) return;
+            origins.push({
+              code,
+              name: option.textContent?.trim() || code,
+              group: groupLabel,
+            });
           });
         });
       } else {
-        // Flat list
-        Array.from(destSelect.options).forEach((option) => {
-          if (option.value && option.value.length === 3) {
-            results.push({
-              code: option.value.toUpperCase(),
-              name: option.textContent?.trim(),
-              group: undefined,
-            });
-          }
+        Array.from(originSelect.options).forEach((option) => {
+          const code = option.value.trim().toUpperCase();
+          if (code.length !== 3) return;
+          origins.push({
+            code,
+            name: option.textContent?.trim() || code,
+          });
         });
       }
 
-      return results;
+      return origins;
     });
 
-    if (destinations.length === 0) {
-      throw new Error("No destinations found in #destination select");
+    if (origins.length === 0) {
+      throw new Error("No origins found in #origin select");
     }
 
-    // Clean up names - remove the airport code suffix e.g. "Atlanta (ATL)" -> "Atlanta"
-    destinations.forEach((d) => {
-      if (d.name) {
-        d.name = d.name.replace(/\s*\([A-Z]{3}\)\s*$/, "").trim();
-      }
-    });
+    const routes: Destination[] = [];
+    const routeCodes = new Set<string>();
 
-    // Capture available month/year options for each destination
-    for (const destination of destinations) {
+    for (const origin of origins) {
       try {
-        await page.selectOption("#destination", destination.code);
-        await page.waitForTimeout(150);
-        destination.availableMonths = await extractAvailableMonths(page);
-        if (destination.availableMonths.length === 0) {
-          console.warn(`  ⚠️  ${destination.code}: no month options found`);
+        await page.selectOption("#origin", origin.code);
+      } catch {
+        console.warn(`  ⚠️  ${origin.code}: could not select origin`);
+        continue;
+      }
+
+      const destinationsAvailable = await waitForDestinationOptions(page);
+      if (!destinationsAvailable) {
+        console.warn(`  ⚠️  ${origin.code}: no destinations found within ${DESTINATION_POPULATION_TIMEOUT_MS}ms`);
+        continue;
+      }
+      await page.waitForTimeout(120);
+
+      const destinationsForOrigin: Array<{ code: string; name: string; group?: string }> = await page.evaluate(() => {
+        const destSelect = document.querySelector("#destination") as HTMLSelectElement | null;
+        if (!destSelect) return [];
+
+        const results: Array<{ code: string; name: string; group?: string }> = [];
+        const optgroups = destSelect.querySelectorAll("optgroup");
+
+        if (optgroups.length > 0) {
+          optgroups.forEach((optgroup) => {
+            const groupLabel = (optgroup.label || "").trim() || undefined;
+            Array.from(optgroup.querySelectorAll("option")).forEach((optionEl) => {
+              const option = optionEl as HTMLOptionElement;
+              const code = option.value.trim().toUpperCase();
+              if (code.length !== 3) return;
+              results.push({
+                code,
+                name: (option.textContent || code).trim(),
+                group: groupLabel,
+              });
+            });
+          });
+        } else {
+          Array.from(destSelect.options).forEach((option) => {
+            const code = option.value.trim().toUpperCase();
+            if (code.length !== 3) return;
+            results.push({
+              code,
+              name: (option.textContent || code).trim(),
+            });
+          });
         }
-      } catch (err) {
-        console.warn(`  ⚠️  ${destination.code}: failed to read month options`);
-        destination.availableMonths = [];
+
+        return results;
+      });
+
+      if (destinationsForOrigin.length === 0) {
+        console.warn(`  ⚠️  ${origin.code}: destination list was empty`);
+        continue;
+      }
+
+      for (const destination of destinationsForOrigin) {
+        const routeCode = `${origin.code}-${destination.code}`;
+        if (routeCodes.has(routeCode)) continue;
+
+        const routeName = `${cleanLocationName(origin.name) || origin.code} -> ${cleanLocationName(destination.name) || destination.code}`;
+        const route: Destination = {
+          code: routeCode,
+          originCode: origin.code,
+          originName: cleanLocationName(origin.name),
+          originGroup: origin.group,
+          destinationCode: destination.code,
+          destinationName: cleanLocationName(destination.name),
+          name: routeName,
+          group: destination.group,
+          availableMonths: [],
+        };
+
+        try {
+          await page.selectOption("#destination", destination.code);
+          await page.waitForTimeout(150);
+          route.availableMonths = await extractAvailableMonths(page);
+          if (route.availableMonths.length === 0) {
+            console.warn(`  ⚠️  ${route.code}: no month options found`);
+          }
+        } catch {
+          console.warn(`  ⚠️  ${route.code}: failed to read month options`);
+          route.availableMonths = [];
+        }
+
+        routeCodes.add(routeCode);
+        routes.push(route);
       }
     }
 
-    console.log(`  Found ${destinations.length} destinations`);
-    writeCache(DESTINATIONS_CACHE, destinations);
+    if (routes.length === 0) {
+      throw new Error("No valid routes found in origin/destination selectors");
+    }
 
-    return destinations;
+    console.log(`  Found ${routes.length} routes across ${origins.length} origins`);
+    writeCache(DESTINATIONS_CACHE, routes);
+
+    return routes;
   } catch (error) {
-    console.error("Error scraping destinations:", error);
+    console.error("Error scraping routes:", error);
     throw error;
   }
 }

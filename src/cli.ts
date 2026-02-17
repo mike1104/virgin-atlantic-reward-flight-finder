@@ -19,7 +19,7 @@ type DestinationDataByCode = Record<string, { outbound: MonthData[]; inbound: Mo
 
 type CliOptions = {
   noCache: boolean;
-  requestedDestinations: string[];
+  requestedRoutes: string[];
 };
 
 const SCRAPE_METADATA_CACHE = "scrape-metadata.json";
@@ -78,21 +78,21 @@ Commands:
 
 Options:
   --no-cache                For process/all: force fresh scrape before processing
-  <DEST> [DEST...]          Restrict to destination codes (e.g. JFK LAX)
+  <ROUTE|AIRPORT> [...]     Restrict by route key (LHR-JFK) or airport code (JFK/LHR)
 `);
 }
 
 function parseCliOptions(args: string[]): CliOptions {
   const noCache = args.includes("--no-cache");
 
-  const requestedDestinations: string[] = [];
+  const requestedRoutes: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg.startsWith("-")) continue;
-    requestedDestinations.push(arg.toUpperCase());
+    requestedRoutes.push(arg.toUpperCase());
   }
 
-  return { noCache, requestedDestinations };
+  return { noCache, requestedRoutes };
 }
 
 function loadScrapeMetadata(): ScrapeManifest | null {
@@ -101,6 +101,10 @@ function loadScrapeMetadata(): ScrapeManifest | null {
 
 function loadFlightsDatasetCache(): DestinationDataByCode | null {
   return readCache<DestinationDataByCode>(FLIGHTS_DATASET_CACHE);
+}
+
+function isRouteCode(value: string): boolean {
+  return /^[A-Z]{3}-[A-Z]{3}$/.test(value);
 }
 
 function serializeDestinationData(
@@ -141,15 +145,50 @@ function ensureScrapeTimestampsInDestinationData(
   return mutated;
 }
 
+function getRouteEndpoints(route: Destination): { originCode: string | null; destinationCode: string | null } {
+  const [fallbackOrigin, fallbackDestination] = route.code.split("-");
+  return {
+    originCode: (route.originCode || fallbackOrigin || "").toUpperCase() || null,
+    destinationCode: (route.destinationCode || fallbackDestination || "").toUpperCase() || null,
+  };
+}
+
+function routeMatchesAnyFilter(route: Destination, filters: string[]): boolean {
+  if (filters.length === 0) return true;
+  const routeCode = route.code.toUpperCase();
+  const endpoints = getRouteEndpoints(route);
+
+  for (const rawToken of filters) {
+    const token = rawToken.toUpperCase();
+    if (token.includes("-")) {
+      if (routeCode === token) return true;
+      continue;
+    }
+    if (
+      token.length === 3 &&
+      (endpoints.originCode === token || endpoints.destinationCode === token)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function filterRoutes(routes: Destination[], filters: string[]): Destination[] {
+  if (filters.length === 0) return routes;
+  return routes.filter((route) => routeMatchesAnyFilter(route, filters));
+}
+
 function filterDestinationData(
   destinationData: Map<string, { outbound: MonthData[]; inbound: MonthData[] }>,
-  requestedDestinations: string[]
+  routes: Destination[]
 ): Map<string, { outbound: MonthData[]; inbound: MonthData[] }> {
-  if (requestedDestinations.length === 0) return destinationData;
-  const requested = new Set(requestedDestinations);
+  if (routes.length === 0) return new Map<string, { outbound: MonthData[]; inbound: MonthData[] }>();
+  const allowedRouteCodes = new Set(routes.map((route) => route.code));
   const filtered = new Map<string, { outbound: MonthData[]; inbound: MonthData[] }>();
   destinationData.forEach((value, code) => {
-    if (requested.has(code)) filtered.set(code, value);
+    if (allowedRouteCodes.has(code)) filtered.set(code, value);
   });
   return filtered;
 }
@@ -177,7 +216,7 @@ function loadDestinationDataFromCache(manifest: ScrapeManifest): Map<string, { o
 }
 
 async function scrapeToCache(
-  requestedDestinations: string[],
+  requestedRoutes: string[],
   forceFresh: boolean
 ): Promise<{ manifest: ScrapeManifest; destinationData: Map<string, { outbound: MonthData[]; inbound: MonthData[] }> }> {
   const scrapeStartedAt = Date.now();
@@ -185,48 +224,53 @@ async function scrapeToCache(
   const page = await browser.newPage();
 
   try {
-    const allDestinations = await scrapeDestinations(page);
-    const targetDestinations = requestedDestinations.length > 0
-      ? allDestinations.filter((d) => requestedDestinations.includes(d.code))
-      : allDestinations;
+    const allRoutes = await scrapeDestinations(page);
+    const targetRoutes = filterRoutes(allRoutes, requestedRoutes);
 
-    if (targetDestinations.length === 0) {
-      console.error("❌ No valid destinations found");
-      console.log("\nAvailable destinations:");
-      allDestinations.forEach((d) => {
-        console.log(`  ${d.code} - ${d.name}`);
+    if (targetRoutes.length === 0) {
+      console.error("❌ No valid routes found");
+      console.log("\nAvailable routes:");
+      allRoutes.forEach((route) => {
+        console.log(`  ${route.code} - ${route.name}`);
       });
       process.exit(1);
     }
 
-    console.log(`📍 Searching ${targetDestinations.length} destinations:`);
-    targetDestinations.forEach((d) => {
-      console.log(`  • ${d.code} - ${d.name}`);
+    console.log(`📍 Searching ${targetRoutes.length} routes:`);
+    targetRoutes.forEach((route) => {
+      console.log(`  • ${route.code} - ${route.name}`);
     });
 
     const defaultMonths = getNext12Months();
     const destinationMonths: Record<string, YearMonth[]> = {};
-    targetDestinations.forEach((destination) => {
-      const selectedMonths = normalizeYearMonths(destination.availableMonths || []);
-      destinationMonths[destination.code] = selectedMonths.length > 0 ? selectedMonths : defaultMonths;
+    targetRoutes.forEach((route) => {
+      const selectedMonths = normalizeYearMonths(route.availableMonths || []);
+      destinationMonths[route.code] = selectedMonths.length > 0 ? selectedMonths : defaultMonths;
     });
 
     const allMonths = normalizeYearMonths(Object.values(destinationMonths).flat());
     console.log(
-      `\n🗓️  Fetching availability for destination-specific month ranges (${allMonths.length} total unique months)...\n`
+      `\n🗓️  Fetching availability for route-specific month ranges (${allMonths.length} total unique months)...\n`
     );
 
     const destinationData = new Map<string, { outbound: MonthData[]; inbound: MonthData[] }>();
     const DEST_BATCH_SIZE = getPositiveIntEnv("VA_DESTINATION_CONCURRENCY", 1);
 
-    for (let i = 0; i < targetDestinations.length; i += DEST_BATCH_SIZE) {
-      const batch = targetDestinations.slice(i, i + DEST_BATCH_SIZE);
+    for (let i = 0; i < targetRoutes.length; i += DEST_BATCH_SIZE) {
+      const batch = targetRoutes.slice(i, i + DEST_BATCH_SIZE);
 
-      await Promise.all(batch.map(async (destination) => {
-        const monthsToScrape = destinationMonths[destination.code] || defaultMonths;
+      await Promise.all(batch.map(async (route) => {
+        const monthsToScrape = destinationMonths[route.code] || defaultMonths;
+        const endpoints = getRouteEndpoints(route);
+        if (!endpoints.originCode || !endpoints.destinationCode) {
+          console.log(`  ⚠️  ${route.code}: Invalid route definition`);
+          return;
+        }
+
         const { outbound, inbound } = await scrapeAllMonths(
           page,
-          destination.code,
+          endpoints.originCode,
+          endpoints.destinationCode,
           monthsToScrape,
           forceFresh
         );
@@ -234,27 +278,27 @@ async function scrapeToCache(
         const hasData = outbound.some((m) => Object.keys(m).length > 0) ||
                         inbound.some((m) => Object.keys(m).length > 0);
         if (hasData) {
-          destinationData.set(destination.code, { outbound, inbound });
-          console.log(`  ✅ ${destination.code}: data collected`);
+          destinationData.set(route.code, { outbound, inbound });
+          console.log(`  ✅ ${route.code}: data collected`);
         } else {
-          console.log(`  ⚠️  ${destination.code}: No availability data found`);
+          console.log(`  ⚠️  ${route.code}: No availability data found`);
         }
       }));
     }
 
     if (destinationData.size === 0) {
-      console.log("\n❌ No data found for any destination\n");
+      console.log("\n❌ No data found for any route\n");
       process.exit(1);
     }
 
     const scrapedAt = new Date().toISOString();
     const successfulDestinationCodes = new Set(destinationData.keys());
-    const successfulDestinations = targetDestinations.filter((dest) =>
-      successfulDestinationCodes.has(dest.code)
+    const successfulDestinations = targetRoutes.filter((route) =>
+      successfulDestinationCodes.has(route.code)
     );
     const successfulDestinationMonths: Record<string, YearMonth[]> = {};
-    successfulDestinations.forEach((destination) => {
-      successfulDestinationMonths[destination.code] = destinationMonths[destination.code] || defaultMonths;
+    successfulDestinations.forEach((route) => {
+      successfulDestinationMonths[route.code] = destinationMonths[route.code] || defaultMonths;
     });
 
     const manifest: ScrapeManifest = {
@@ -278,7 +322,7 @@ async function scrapeToCache(
 async function scrapeCommand(args: string[]): Promise<void> {
   ensureDirs();
   const options = parseCliOptions(args);
-  await scrapeToCache(options.requestedDestinations, options.noCache);
+  await scrapeToCache(options.requestedRoutes, options.noCache);
   console.log("✅ Scrape complete. Cache populated.\n");
 }
 
@@ -289,29 +333,40 @@ async function processCommand(args: string[]): Promise<void> {
   let manifest = loadScrapeMetadata();
   let destinationData = manifest ? loadDestinationDataFromCache(manifest) : new Map<string, { outbound: MonthData[]; inbound: MonthData[] }>();
 
-  const missingCache = !manifest || destinationData.size === 0;
-  const missingRequested = options.requestedDestinations.some((code) => !destinationData.has(code));
+  const legacyManifestFormat = !!manifest && manifest.destinations.some((route) => !isRouteCode(route.code));
+  const requestedFromManifest = manifest ? filterRoutes(manifest.destinations, options.requestedRoutes) : [];
+  const missingCache = !manifest || destinationData.size === 0 || legacyManifestFormat;
+  const missingRequested =
+    options.requestedRoutes.length > 0 &&
+    (requestedFromManifest.length === 0 || requestedFromManifest.some((route) => !destinationData.has(route.code)));
+
   if (options.noCache || missingCache || missingRequested) {
     console.log("📦 Cache missing/incomplete (or --no-cache set). Running scrape first...");
-    const scraped = await scrapeToCache(options.requestedDestinations, options.noCache);
+    const scraped = await scrapeToCache(options.requestedRoutes, options.noCache);
     manifest = scraped.manifest;
     destinationData = scraped.destinationData;
   } else if (manifest) {
     console.log(`📦 Processing from cache (scraped ${manifest.scrapedAt})`);
   }
 
-  const filteredDestinationData = filterDestinationData(destinationData, options.requestedDestinations);
+  if (!manifest) {
+    console.error("❌ No scrape metadata available.");
+    process.exit(1);
+  }
+
+  const scopedRoutes = filterRoutes(manifest.destinations, options.requestedRoutes);
+  const routesToProcess = options.requestedRoutes.length > 0 ? scopedRoutes : manifest.destinations;
+  const filteredDestinationData = filterDestinationData(destinationData, routesToProcess);
+
   if (filteredDestinationData.size === 0) {
-    console.error("❌ No data available for requested destinations.");
+    console.error("❌ No data available for requested routes.");
     process.exit(1);
   }
 
   writeReportData(filteredDestinationData, OUTPUT_FLIGHTS_DATA_FILE);
-  if (manifest) {
-    const filteredDestinations = filterDestinationsMetadata(manifest.destinations, filteredDestinationData);
-    writeDestinationMetadata(filteredDestinations, OUTPUT_DESTINATIONS_FILE);
-  }
-  console.log(`🧱 Processed data file written for ${filteredDestinationData.size} destinations: output/${OUTPUT_FLIGHTS_DATA_FILE}\n`);
+  const filteredDestinations = filterDestinationsMetadata(routesToProcess, filteredDestinationData);
+  writeDestinationMetadata(filteredDestinations, OUTPUT_DESTINATIONS_FILE);
+  console.log(`🧱 Processed data file written for ${filteredDestinationData.size} routes: output/${OUTPUT_FLIGHTS_DATA_FILE}\n`);
 }
 
 function buildCommand(): void {
@@ -325,10 +380,14 @@ async function allCommand(args: string[]): Promise<void> {
   ensureDirs();
   const options = parseCliOptions(args);
 
-  const scraped = await scrapeToCache(options.requestedDestinations, options.noCache);
-  const filteredDestinationData = filterDestinationData(scraped.destinationData, options.requestedDestinations);
+  const scraped = await scrapeToCache(options.requestedRoutes, options.noCache);
+  const filteredRoutes = filterRoutes(scraped.manifest.destinations, options.requestedRoutes);
+  const routesToProcess = options.requestedRoutes.length > 0 ? filteredRoutes : scraped.manifest.destinations;
+
+  const filteredDestinationData = filterDestinationData(scraped.destinationData, routesToProcess);
   writeReportData(filteredDestinationData, OUTPUT_FLIGHTS_DATA_FILE);
-  const filteredDestinations = filterDestinationsMetadata(scraped.manifest.destinations, filteredDestinationData);
+
+  const filteredDestinations = filterDestinationsMetadata(routesToProcess, filteredDestinationData);
   writeDestinationMetadata(filteredDestinations, OUTPUT_DESTINATIONS_FILE);
   buildReportShell(OUTPUT_REPORT_FILE);
 
@@ -364,7 +423,6 @@ async function main(): Promise<void> {
       printUsage();
       break;
     default:
-      // Default command keeps one-shot behavior.
       await allCommand(args);
       break;
   }

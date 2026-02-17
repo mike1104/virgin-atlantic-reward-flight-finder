@@ -17,7 +17,7 @@ function mergeMonthData(monthDataArray: MonthData[]): MonthData {
 }
 
 export function computeReturnCombos(
-  destination: string,
+  routeCode: string,
   outboundMonths: MonthData[],
   inboundMonths: MonthData[]
 ): ReturnCombo[] {
@@ -74,7 +74,7 @@ export function computeReturnCombos(
           const inboundPoints = inboundPricing[inboundCabin]!;
 
           combos.push({
-            route: `LHR-${destination}`,
+            route: routeCode,
             depart: departDate,
             return: returnDate,
             nights,

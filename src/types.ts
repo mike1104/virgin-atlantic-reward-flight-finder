@@ -4,7 +4,13 @@ export type YearMonth = {
 };
 
 export type Destination = {
+  // Route key in ORIGIN-DEST format (e.g. "LHR-JFK").
   code: string;
+  originCode?: string;
+  originName?: string;
+  originGroup?: string;
+  destinationCode?: string;
+  destinationName?: string;
   name?: string;
   group?: string; // Region grouping like "North America", "Asia", etc.
   availableMonths?: YearMonth[];

@@ -1,5 +1,9 @@
 var RAW_DATA = {};
 var DESTINATIONS_META = [];
+var ROUTE_META_BY_CODE = {};
+var ROUTES = [];
+var ROUTES_BY_OD = {};
+var ORIGIN_OPTIONS = [];
 
 // ===== Utility functions =====
 function addDays(dateStr, days) {
@@ -43,6 +47,140 @@ function escapeAttr(str) {
 
 function escapeHtml(str) {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function getRouteParts(routeCode) {
+  var parts = String(routeCode || '').split('-');
+  return {
+    origin: parts[0] || '',
+    destination: parts[1] || ''
+  };
+}
+
+function getDepartureSelection() {
+  var selected = document.querySelector('.from-radio:checked');
+  return selected ? selected.value : '';
+}
+
+function buildRouteCatalog() {
+  ROUTE_META_BY_CODE = {};
+  for (var i = 0; i < DESTINATIONS_META.length; i++) {
+    var meta = DESTINATIONS_META[i];
+    if (!meta || !meta.code) continue;
+    ROUTE_META_BY_CODE[meta.code] = meta;
+  }
+
+  ROUTES = [];
+  ROUTES_BY_OD = {};
+  var originsByCode = {};
+  var routeCodes = Object.keys(RAW_DATA || {});
+  for (var ri = 0; ri < routeCodes.length; ri++) {
+    var routeCode = routeCodes[ri];
+    var routeMeta = ROUTE_META_BY_CODE[routeCode] || {};
+    var parts = getRouteParts(routeCode);
+    var originCode = routeMeta.originCode || parts.origin;
+    var destinationCode = routeMeta.destinationCode || parts.destination;
+    if (!originCode || !destinationCode) continue;
+
+    var destinationName = routeMeta.destinationName || destinationCode;
+    var originName = routeMeta.originName || originCode;
+    ROUTES.push({
+      routeCode: routeCode,
+      originCode: originCode,
+      destinationCode: destinationCode,
+      originName: originName,
+      destinationName: destinationName,
+      group: routeMeta.group || 'Other',
+      routeLabel: routeMeta.name || (originName + ' -> ' + destinationName)
+    });
+    ROUTES_BY_OD[originCode + '|' + destinationCode] = routeCode;
+    if (!originsByCode[originCode]) {
+      originsByCode[originCode] = {
+        name: originName,
+        group: routeMeta.originGroup || 'Other'
+      };
+    }
+  }
+
+  ORIGIN_OPTIONS = Object.keys(originsByCode).map(function(code) {
+    return {
+      code: code,
+      name: originsByCode[code].name,
+      group: originsByCode[code].group || 'Other'
+    };
+  }).sort(function(a, b) {
+    var groupCmp = (a.group || 'Other').localeCompare(b.group || 'Other');
+    if (groupCmp !== 0) return groupCmp;
+    return (a.name + ' (' + a.code + ')').localeCompare(b.name + ' (' + b.code + ')');
+  });
+}
+
+function populateDepartureOptions() {
+  var fromList = document.querySelector('.from-list');
+  if (!fromList) return;
+  var current = getDepartureSelection();
+  fromList.innerHTML = '';
+
+  var groups = {};
+  for (var i = 0; i < ORIGIN_OPTIONS.length; i++) {
+    var optionDef = ORIGIN_OPTIONS[i];
+    var groupName = optionDef.group || 'Other';
+    if (!groups[groupName]) groups[groupName] = [];
+    groups[groupName].push(optionDef);
+  }
+
+  var groupNames = Object.keys(groups).sort(function(a, b) {
+    if (a === 'Other') return 1;
+    if (b === 'Other') return -1;
+    return a.localeCompare(b);
+  });
+
+  for (var gi = 0; gi < groupNames.length; gi++) {
+    var groupName = groupNames[gi];
+    var groupHtml = '<div class="dest-group-label">' + escapeHtml(groupName) + '</div>';
+    var options = groups[groupName];
+    for (var oi = 0; oi < options.length; oi++) {
+      var optionDef = options[oi];
+      var checked = current && current === optionDef.code;
+      groupHtml += '<label class="from-option">' +
+        '<input type="radio" name="from-airport" class="from-radio" value="' + escapeAttr(optionDef.code) + '"' + (checked ? ' checked' : '') + '>' +
+        '<span>' + escapeHtml(optionDef.name + ' (' + optionDef.code + ')') + '</span>' +
+      '</label>';
+    }
+    fromList.innerHTML += groupHtml;
+  }
+}
+
+function updateFromToggleLabel() {
+  var btn = document.querySelector('.from-toggle');
+  if (!btn) return;
+  var selected = document.querySelector('.from-radio:checked');
+  if (!selected) {
+    btn.textContent = 'Select departure';
+    return;
+  }
+  var label = selected.parentElement ? selected.parentElement.textContent : '';
+  btn.textContent = (label || '').trim() || selected.value;
+}
+
+function setDepartureSelection(code) {
+  if (!code) return;
+  var target = document.querySelector('.from-radio[value="' + code.replace(/"/g, '\\"') + '"]');
+  if (target) target.checked = true;
+}
+
+function bindFromOptionEvents() {
+  document.querySelectorAll('.from-radio').forEach(function(radio) {
+    radio.addEventListener('change', function() {
+      populateDestinations();
+      bindDestinationCheckboxEvents();
+      updateFromToggleLabel();
+      updateDestToggleLabel();
+      invalidateAndRender();
+      var fromDropdown = document.querySelector('.from-dropdown');
+      if (fromDropdown) fromDropdown.classList.remove('open');
+    });
+  });
 }
 
 function parseIsoDateInput(value) {
@@ -163,8 +301,8 @@ function selectRemainingSeatDisplay(outSeats, inSeats, outDisplay, inDisplay, re
 // Estimated taxes/fees model in GBP.
 // Defaults apply to all routes, then route overrides (by destination code) can adjust values.
 var DEFAULT_EST_FEES_GBP = {
-  outbound: { economy: 180, premium: 300, upper: 650 }, // LHR -> destination
-  inbound: { economy: 120, premium: 220, upper: 500 }   // destination -> LHR
+  outbound: { economy: 180, premium: 300, upper: 650 }, // origin -> destination
+  inbound: { economy: 120, premium: 220, upper: 500 }   // destination -> origin
 };
 
 var ROUTE_FEE_OVERRIDES_GBP = {
@@ -422,7 +560,8 @@ function sortCombos(combos, column, direction, filters) {
   combos.sort(function(a, b) {
     var aVal, bVal;
     switch (column) {
-      case 'dest': aVal = a.dest; bVal = b.dest; break;
+      case 'origin': aVal = a.originCode || ''; bVal = b.originCode || ''; break;
+      case 'destination': aVal = a.destinationCode || ''; bVal = b.destinationCode || ''; break;
       case 'depart': aVal = a.depart; bVal = b.depart; break;
       case 'return': aVal = a.ret; bVal = b.ret; break;
       case 'nights': aVal = a.nights; bVal = b.nights; break;
@@ -435,8 +574,8 @@ function sortCombos(combos, column, direction, filters) {
         bVal = b.remainingSeats === null ? -1 : b.remainingSeats;
         break;
       case 'taxesFees':
-        aVal = estimateTaxesFeesGBP(a.dest, a.outCabin, a.inCabin, filters.adults);
-        bVal = estimateTaxesFeesGBP(b.dest, b.outCabin, b.inCabin, filters.adults);
+        aVal = estimateTaxesFeesGBP(a.destinationCode || a.dest, a.outCabin, a.inCabin, filters.adults);
+        bVal = estimateTaxesFeesGBP(b.destinationCode || b.dest, b.outCabin, b.inCabin, filters.adults);
         break;
       case 'scrapedAt':
         aVal = a.scrapedAtMs === null ? -1 : a.scrapedAtMs;
@@ -461,7 +600,7 @@ var paginationState = {};
 var comboCache = {};
 
 // ===== Get currently selected destinations =====
-function getSelectedDests() {
+function getSelectedDestinations() {
   var cbs = document.querySelectorAll('.dest-cb');
   var selected = [];
   cbs.forEach(function(cb) { if (cb.checked) selected.push(cb.value); });
@@ -475,7 +614,8 @@ function updateDestToggleLabel() {
   cbs.forEach(function(cb) { if (cb.checked) checked++; });
   var btn = document.querySelector('.dest-toggle');
   if (!btn) return;
-  if (checked === 0) btn.textContent = 'No destinations selected';
+  if (total === 0) btn.textContent = 'Select departure first';
+  else if (checked === 0) btn.textContent = 'No destinations selected';
   else if (checked === total) btn.textContent = 'All destinations selected';
   else if (checked === 1) {
     var sel = document.querySelector('.dest-cb:checked');
@@ -486,8 +626,9 @@ function updateDestToggleLabel() {
 
 // ===== Render current page of combos =====
 function render() {
-  var selectedDests = getSelectedDests();
-  if (selectedDests.length === 0) {
+  var selectedDestinations = getSelectedDestinations();
+  var departureCode = getDepartureSelection();
+  if (!departureCode || selectedDestinations.length === 0) {
     document.querySelector('.results-table tbody').innerHTML = '';
     var comboCountEl = document.querySelector('.combo-count');
     var visibleCountEl = document.querySelector('.visible-count');
@@ -502,15 +643,23 @@ function render() {
 
   // Merge combos from all selected destinations
   var combos = [];
-  for (var di = 0; di < selectedDests.length; di++) {
-    var dc = selectedDests[di];
-    if (!comboCache[dc]) {
-      comboCache[dc] = computeCombos(dc, filters);
+  for (var di = 0; di < selectedDestinations.length; di++) {
+    var destinationCode = selectedDestinations[di];
+    var routeCode = ROUTES_BY_OD[departureCode + '|' + destinationCode];
+    if (!routeCode) continue;
+
+    if (!comboCache[routeCode]) {
+      comboCache[routeCode] = computeCombos(routeCode, filters);
     }
-    var destCombos = comboCache[dc];
+    var destCombos = comboCache[routeCode];
     for (var ci = 0; ci < destCombos.length; ci++) {
       var combo = destCombos[ci];
-      combo.dest = dc;
+      combo.dest = routeCode;
+      var routeMeta = ROUTE_META_BY_CODE[routeCode];
+      var routeParts = getRouteParts(routeCode);
+      combo.destLabel = routeMeta && routeMeta.name ? routeMeta.name : routeCode;
+      combo.originCode = routeMeta && routeMeta.originCode ? routeMeta.originCode : routeParts.origin;
+      combo.destinationCode = routeMeta && routeMeta.destinationCode ? routeMeta.destinationCode : routeParts.destination;
       combos.push(combo);
     }
   }
@@ -616,8 +765,10 @@ function render() {
       topUpHtml = '<td class="top-up-cost" style="' + barStyle + '" title="' + escapeAttr(tooltip) + '">\u00A3' + totalCost.toFixed(2) + '</td>';
     }
 
-    var searchUrl = generateSearchUrl('LHR', c.dest, c.depart, c.ret, adults);
-    var estFees = estimateTaxesFeesGBP(c.dest, c.outCabin, c.inCabin, adults);
+    var routeOrigin = c.originCode || getRouteParts(c.dest).origin;
+    var routeDestination = c.destinationCode || getRouteParts(c.dest).destination;
+    var searchUrl = generateSearchUrl(routeOrigin, routeDestination, c.depart, c.ret, adults);
+    var estFees = estimateTaxesFeesGBP(routeDestination || c.dest, c.outCabin, c.inCabin, adults);
     var remainingSeatsLabel = c.remainingSeatsDisplay || (c.remainingSeats === null ? '-' : String(c.remainingSeats));
     var remainingSeatsTooltip = 'Outbound seats: ' + (c.outSeatsDisplay || (c.outSeats === null ? 'Unknown' : String(c.outSeats))) +
       '\nInbound seats: ' + (c.inSeatsDisplay || (c.inSeats === null ? 'Unknown' : String(c.inSeats))) +
@@ -641,7 +792,8 @@ function render() {
       '</span>';
 
     rowsHtml += '<tr' + rowClass + '>' +
-      '<td>' + c.dest + '</td>' +
+      '<td>' + (routeOrigin || '-') + '</td>' +
+      '<td>' + (routeDestination || '-') + '</td>' +
       '<td>' + formatDate(c.depart) + '</td>' +
       '<td>' + formatDate(c.ret) + '</td>' +
       '<td>' + c.nights + '</td>' +
@@ -730,6 +882,9 @@ function render() {
 // ===== URL hash persistence =====
 function saveFiltersToHash() {
   var params = new URLSearchParams();
+  var departure = getDepartureSelection();
+  if (departure) params.set('origin', departure);
+
   var allCbs = document.querySelectorAll('.dest-cb');
   var allChecked = true;
   var selectedDests = [];
@@ -770,14 +925,11 @@ function restoreFiltersFromHash() {
   var params;
   try { params = new URLSearchParams(hash); } catch(e) { return; }
 
-  var dest = params.get('dest');
-  if (dest) {
-    var selectedSet = new Set(dest.split(',').filter(Boolean));
-    document.querySelectorAll('.dest-cb').forEach(function(cb) {
-      cb.checked = selectedSet.has(cb.value);
-    });
-    updateDestToggleLabel();
-  }
+  var origin = params.get('origin');
+  if (origin) setDepartureSelection(origin);
+  updateFromToggleLabel();
+
+  populateDestinations(params.get('dest'));
 
   var cabinMin = params.get('cabinMin');
   if (cabinMin && getCabinRank(cabinMin)) {
@@ -824,26 +976,23 @@ function invalidateAndRender() {
   render();
 }
 
-function populateDestinations() {
+function populateDestinations(preferredDestinationsCsv) {
   var destList = document.querySelector('.dest-list');
   if (!destList) return;
-  var codes = Object.keys(RAW_DATA);
-  var metadataByCode = {};
-  for (var i = 0; i < DESTINATIONS_META.length; i++) {
-    var item = DESTINATIONS_META[i];
-    if (!item || !item.code) continue;
-    metadataByCode[item.code] = item;
-  }
+  var departureCode = getDepartureSelection();
+  var preferredSet = preferredDestinationsCsv
+    ? new Set(preferredDestinationsCsv.split(',').filter(Boolean))
+    : null;
 
   var groups = {};
-  for (var ci = 0; ci < codes.length; ci++) {
-    var code = codes[ci];
-    var meta = metadataByCode[code] || {};
-    var group = meta.group || 'Other';
+  for (var ci = 0; ci < ROUTES.length; ci++) {
+    var route = ROUTES[ci];
+    if (route.originCode !== departureCode) continue;
+    var group = route.group || 'Other';
     if (!groups[group]) groups[group] = [];
     groups[group].push({
-      code: code,
-      label: meta.name ? (meta.name + ' (' + code + ')') : code
+      code: route.destinationCode,
+      label: route.destinationName ? (route.destinationName + ' (' + route.destinationCode + ')') : route.destinationCode
     });
   }
 
@@ -864,14 +1013,26 @@ function populateDestinations() {
 
     for (var di = 0; di < groups[groupName].length; di++) {
       var dest = groups[groupName][di];
+      var checked = preferredSet ? preferredSet.has(dest.code) : false;
       html += '<label class="dest-option"><input type="checkbox" class="dest-cb" value="' +
-        escapeAttr(dest.code) + '" checked><span>' + escapeHtml(dest.label) + '</span></label>';
+        escapeAttr(dest.code) + '"' + (checked ? ' checked' : '') + '><span>' + escapeHtml(dest.label) + '</span></label>';
     }
   }
   destList.innerHTML = html;
 }
 
+function bindDestinationCheckboxEvents() {
+  document.querySelectorAll('.dest-cb').forEach(function(cb) {
+    cb.addEventListener('change', function() {
+      updateDestToggleLabel();
+      invalidateAndRender();
+    });
+  });
+}
+
 function initApp() {
+  buildRouteCatalog();
+  populateDepartureOptions();
   populateDestinations();
   populateCabinMinControl();
 
@@ -893,6 +1054,10 @@ function initApp() {
 
   // Restore saved filters from URL hash
   restoreFiltersFromHash();
+  bindFromOptionEvents();
+  bindDestinationCheckboxEvents();
+  updateFromToggleLabel();
+  updateDestToggleLabel();
 
   var filtersShell = document.querySelector('.filters-shell');
   var filtersToggle = document.querySelector('.filters-toggle');
@@ -906,25 +1071,32 @@ function initApp() {
   }
 
   // Destination multi-select
+  var fromToggle = document.querySelector('.from-toggle');
+  var fromDropdown = document.querySelector('.from-dropdown');
   var destToggle = document.querySelector('.dest-toggle');
   var destDropdown = document.querySelector('.dest-dropdown');
+
+  if (fromToggle && fromDropdown) {
+    fromToggle.addEventListener('click', function(e) {
+      e.stopPropagation();
+      fromDropdown.classList.toggle('open');
+      destDropdown.classList.remove('open');
+    });
+  }
 
   destToggle.addEventListener('click', function(e) {
     e.stopPropagation();
     destDropdown.classList.toggle('open');
+    if (fromDropdown) fromDropdown.classList.remove('open');
   });
 
   document.addEventListener('click', function(e) {
+    if (!e.target.closest('.from-multiselect') && fromDropdown) {
+      fromDropdown.classList.remove('open');
+    }
     if (!e.target.closest('.dest-multiselect')) {
       destDropdown.classList.remove('open');
     }
-  });
-
-  document.querySelectorAll('.dest-cb').forEach(function(cb) {
-    cb.addEventListener('change', function() {
-      updateDestToggleLabel();
-      invalidateAndRender();
-    });
   });
 
   document.querySelector('.dest-select-all').addEventListener('click', function() {

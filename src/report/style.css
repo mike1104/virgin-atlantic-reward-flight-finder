@@ -109,25 +109,28 @@ header p {
   display: none;
 }
 
-.dest-multiselect {
+.dest-multiselect,
+.from-multiselect {
   position: relative;
   display: inline-block;
 }
 
-.dest-toggle {
+.dest-toggle,
+.from-toggle {
   padding: 8px 12px;
   border: 1px solid var(--color-border);
   border-radius: 4px;
   font-size: 14px;
   cursor: pointer;
   background: var(--color-surface);
-  min-width: 200px;
+  min-width: 220px;
   text-align: left;
   position: relative;
   padding-right: 28px;
 }
 
-.dest-toggle::after {
+.dest-toggle::after,
+.from-toggle::after {
   content: "\25BC";
   position: absolute;
   right: 10px;
@@ -138,12 +141,15 @@ header p {
 }
 
 .dest-toggle:hover,
-.dest-toggle:focus {
+.dest-toggle:focus,
+.from-toggle:hover,
+.from-toggle:focus {
   outline: none;
   border-color: var(--color-primary);
 }
 
-.dest-dropdown {
+.dest-dropdown,
+.from-dropdown {
   display: none;
   position: absolute;
   top: 100%;
@@ -160,6 +166,10 @@ header p {
 }
 
 .dest-dropdown.open {
+  display: block;
+}
+
+.from-dropdown.open {
   display: block;
 }
 
@@ -206,10 +216,25 @@ header p {
   background: var(--color-surface-soft);
 }
 
-.dest-option input[type="checkbox"] {
+.dest-option input[type="checkbox"],
+.from-option input[type="radio"] {
   width: 16px;
   height: 16px;
   cursor: pointer;
+}
+
+.from-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.from-option:hover {
+  background: var(--color-surface-soft);
 }
 
 .results-area {
@@ -503,12 +528,12 @@ tr:hover {
 
 .saver-tag-icon {
   position: absolute;
-  top: -1px;
+  top: 0;
   right: -8px;
   width: 12px;
   height: 7px;
   line-height: 0;
-  opacity: 0.7;
+  opacity: 0.55;
   pointer-events: none;
   transform: rotate(135deg);
   transform-origin: center;

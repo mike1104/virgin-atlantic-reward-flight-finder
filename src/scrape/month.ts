@@ -3,7 +3,6 @@ import { Page } from "playwright";
 import { MonthData, ApiMonthResponse, YearMonth } from "../types";
 import { readCache, writeCache, cacheExists, getCachePath } from "../utils/cache";
 
-const ORIGIN = "LHR";
 const CACHE_MAX_AGE_MS = 60 * 60 * 1000; // 1 hour
 
 function getPositiveIntEnv(name: string, fallback: number): number {
@@ -15,12 +14,12 @@ function getPositiveIntEnv(name: string, fallback: number): number {
 }
 
 function getMonthCacheFilename(
-  dest: string,
-  direction: "outbound" | "inbound",
+  origin: string,
+  destination: string,
   year: string,
   month: string
 ): string {
-  return `${dest}-${direction}-${year}-${month}.json`;
+  return `${origin}-${destination}-${year}-${month}.json`;
 }
 
 function addMissingScrapeTimestamps(
@@ -167,9 +166,7 @@ export async function scrapeMonth(
   year: string,
   refresh: boolean = false
 ): Promise<MonthData> {
-  const direction = origin === ORIGIN ? "outbound" : "inbound";
-  const dest = origin === ORIGIN ? destination : origin;
-  const cacheFilename = getMonthCacheFilename(dest, direction, year, month);
+  const cacheFilename = getMonthCacheFilename(origin, destination, year, month);
 
   if (!refresh && cacheExists(cacheFilename)) {
     const cached = readCache<MonthData>(cacheFilename);
@@ -183,11 +180,11 @@ export async function scrapeMonth(
         writeCache(cacheFilename, upgradedCached);
       }
       if (cacheAgeMs > CACHE_MAX_AGE_MS) {
-        console.log(`  ↻ Refreshing ${dest} ${direction} ${year}-${month} (cache older than 1 hour)`);
+        console.log(`  ↻ Refreshing ${origin} → ${destination} ${year}-${month} (cache older than 1 hour)`);
       } else if (hasMissingSeatCounts(upgradedCached)) {
-        console.log(`  ↻ Refreshing ${dest} ${direction} ${year}-${month} to capture seat counts`);
+        console.log(`  ↻ Refreshing ${origin} → ${destination} ${year}-${month} to capture seat counts`);
       } else {
-        console.log(`  ✓ Loaded ${dest} ${direction} ${year}-${month} from cache`);
+        console.log(`  ✓ Loaded ${origin} → ${destination} ${year}-${month} from cache`);
         return upgradedCached;
       }
     }
@@ -205,11 +202,12 @@ export async function scrapeMonth(
 
 export async function scrapeAllMonths(
   page: Page,
+  origin: string,
   destination: string,
   months: YearMonth[],
   refresh: boolean = false
 ): Promise<{ outbound: MonthData[]; inbound: MonthData[] }> {
-  console.log(`\nFetching ${destination}...`);
+  console.log(`\nFetching ${origin} ↔ ${destination}...`);
 
   const browser = page.context().browser();
   if (!browser) {
@@ -230,7 +228,7 @@ export async function scrapeAllMonths(
   });
 
   // Higher parallelism with tunable caps.
-  const BATCH_SIZE = getPositiveIntEnv("VA_MONTH_REQUEST_CONCURRENCY", 12);
+  const BATCH_SIZE = getPositiveIntEnv("VA_MONTH_REQUEST_CONCURRENCY", 6);
   const BATCH_DELAY_MS = getPositiveIntEnv("VA_MONTH_BATCH_DELAY_MS", 150);
   const outboundResults: MonthData[] = new Array(months.length);
   const inboundResults: MonthData[] = new Array(months.length);
@@ -242,9 +240,9 @@ export async function scrapeAllMonths(
     const batchPromises = batch.map(async (req) => {
       const batchPage = await browser.newPage();
       try {
-        const origin = req.type === 'outbound' ? ORIGIN : destination;
-        const dest = req.type === 'outbound' ? destination : ORIGIN;
-        const data = await scrapeMonth(batchPage, origin, dest, req.month, req.year, refresh);
+        const requestOrigin = req.type === 'outbound' ? origin : destination;
+        const requestDest = req.type === 'outbound' ? destination : origin;
+        const data = await scrapeMonth(batchPage, requestOrigin, requestDest, req.month, req.year, refresh);
 
         if (req.type === 'outbound') {
           outboundResults[req.index] = data;

@@ -21,9 +21,18 @@
       <div class="global-filters">
         <div class="filters-row filters-row-primary">
           <div class="filter-section">
-            <span class="filter-label">Destinations:</span>
+            <span class="filter-label">From:</span>
+            <div class="from-multiselect">
+              <button type="button" class="from-toggle">Select departure</button>
+              <div class="from-dropdown">
+                <div class="from-list"></div>
+              </div>
+            </div>
+          </div>
+          <div class="filter-section">
+            <span class="filter-label">To:</span>
             <div class="dest-multiselect">
-              <button type="button" class="dest-toggle">All destinations selected</button>
+              <button type="button" class="dest-toggle">All selected</button>
               <div class="dest-dropdown">
                 <div class="dest-actions">
                   <button type="button" class="dest-select-all">Select All</button>
@@ -94,7 +103,8 @@
         <table class="results-table">
           <thead>
             <tr>
-              <th class="sortable" data-column="dest">Dest</th>
+              <th class="sortable" data-column="origin">From</th>
+              <th class="sortable" data-column="destination">To</th>
               <th class="sortable" data-column="depart">Depart</th>
               <th class="sortable" data-column="return">Return</th>
               <th class="sortable" data-column="nights">Nights</th>

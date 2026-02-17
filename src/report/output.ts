@@ -54,7 +54,7 @@ function copyStaticAssets(): void {
 }
 
 type DestinationDataMap = Map<string, { outbound: MonthData[]; inbound: MonthData[] }>;
-type DestinationMeta = Pick<Destination, "code" | "name" | "group">;
+type DestinationMeta = Pick<Destination, "code" | "name" | "group" | "originCode" | "destinationCode">;
 
 function buildRawData(destinationData: DestinationDataMap): Record<string, { outbound: MonthData; inbound: MonthData }> {
   const rawData: Record<string, { outbound: MonthData; inbound: MonthData }> = {};
