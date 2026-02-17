@@ -19,13 +19,13 @@ type DestinationDataByCode = Record<string, { outbound: MonthData[]; inbound: Mo
 
 type CliOptions = {
   noCache: boolean;
-  outputFilename: string;
   requestedDestinations: string[];
 };
 
 const SCRAPE_METADATA_CACHE = "scrape-metadata.json";
 const FLIGHTS_DATASET_CACHE = "flights-dataset.json";
 const OUTPUT_FLIGHTS_DATA_FILE = "flights-data.js";
+const OUTPUT_REPORT_FILE = "report.html";
 
 function normalizeYearMonths(months: YearMonth[]): YearMonth[] {
   const uniq = new Set<string>();
@@ -61,30 +61,21 @@ Commands:
 
 Options:
   --no-cache                For process/all: force fresh scrape before processing
-  --output <file>           Output filename (default: report.html)
   <DEST> [DEST...]          Restrict to destination codes (e.g. JFK LAX)
 `);
 }
 
 function parseCliOptions(args: string[]): CliOptions {
   const noCache = args.includes("--no-cache");
-  const outputIdx = args.indexOf("--output");
-  const outputFilename = outputIdx >= 0 && args[outputIdx + 1]
-    ? args[outputIdx + 1]
-    : "report.html";
 
   const requestedDestinations: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === "--output") {
-      i++;
-      continue;
-    }
     if (arg.startsWith("-")) continue;
     requestedDestinations.push(arg.toUpperCase());
   }
 
-  return { noCache, outputFilename, requestedDestinations };
+  return { noCache, requestedDestinations };
 }
 
 function loadScrapeMetadata(): ScrapeManifest | null {
@@ -335,11 +326,11 @@ function buildCommand(args: string[]): void {
   const maps = buildDestinationMaps(selectedDestinations);
   buildReportShell(
     destinationCodes,
-    options.outputFilename,
+    OUTPUT_REPORT_FILE,
     maps.names,
     maps.groups.size > 0 ? maps.groups : undefined
   );
-  console.log(`\nReport shell generated: output/${options.outputFilename}`);
+  console.log(`\nReport shell generated: output/${OUTPUT_REPORT_FILE}`);
   console.log("✅ Build complete.\n");
 }
 
@@ -356,13 +347,13 @@ async function allCommand(args: string[]): Promise<void> {
   const maps = buildDestinationMaps(selectedDestinations);
   buildReportShell(
     destinationCodes,
-    options.outputFilename,
+    OUTPUT_REPORT_FILE,
     maps.names,
     maps.groups.size > 0 ? maps.groups : undefined
   );
 
-  console.log(`\nReport generated: output/${options.outputFilename}`);
-  console.log("✅ Done! Open output/" + options.outputFilename + " in your browser.\n");
+  console.log(`\nReport generated: output/${OUTPUT_REPORT_FILE}`);
+  console.log("✅ Done! Open output/" + OUTPUT_REPORT_FILE + " in your browser.\n");
 }
 
 async function main(): Promise<void> {

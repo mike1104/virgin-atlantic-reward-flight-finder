@@ -74,13 +74,6 @@ npm run process -- --no-cache
 npm run process -- --no-cache JFK
 ```
 
-### Custom Output Filename
-
-```bash
-npm run build -- --output us-report.html
-npm run all -- --output rebuilt.html
-```
-
 ### Build Report Shell Without Scraping
 
 ```bash
@@ -90,7 +83,6 @@ npm run build
 ## CLI Options
 
 - `--no-cache`: force a fresh scrape before processing/building
-- `--output <file>`: output report filename (default `report.html`)
 - `<DEST> [DEST...]`: optional list of destination codes to include (for example `JFK LAX`)
 
 ## How Data Is Selected
