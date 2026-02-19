@@ -3,15 +3,15 @@
 import * as fs from "fs";
 import * as readline from "readline";
 import { chromium } from "playwright";
-import { scrapeMonth } from "./scrape/month";
-import { scrapeDestinations } from "./scrape/destinations";
-import { buildReportShell, writeDestinationMetadata, writeReportData } from "./report/output";
-import { cacheExists, ensureDirs, getCachePath, readCache, writeCache } from "./utils/cache";
-import { getNext12Months } from "./utils/dates";
-import { getNonNegativeIntEnv, getPositiveIntEnv } from "./utils/env";
-import { getMonthCacheFilename, hasMissingSeatCounts } from "./utils/month-data";
-import { normalizeYearMonths } from "./utils/year-month";
-import { Destination, MonthData, YearMonth } from "./types";
+import { writeReportData, writeDestinationMetadata, buildReportShell } from "./app/output";
+import { scrapeDestinations } from "./scraper/destinations";
+import { scrapeMonth } from "./scraper/month";
+import { Destination, MonthData, YearMonth } from "./shared/types";
+import { cacheExists, ensureDirs, getCachePath, readCache, writeCache } from "./shared/utils/cache";
+import { getNext12Months } from "./shared/utils/dates";
+import { getNonNegativeIntEnv, getPositiveIntEnv } from "./shared/utils/env";
+import { getMonthCacheFilename, hasMissingSeatCounts } from "./shared/utils/month-data";
+import { normalizeYearMonths } from "./shared/utils/year-month";
 
 type ScrapeManifest = {
   destinations: Destination[];

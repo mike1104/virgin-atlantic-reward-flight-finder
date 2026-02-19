@@ -1,7 +1,7 @@
 import { Page } from "playwright";
-import { Destination, YearMonth } from "../types";
-import { cacheExists, getCachePath, readCache, writeCache } from "../utils/cache";
-import { normalizeYearMonths } from "../utils/year-month";
+import { Destination, YearMonth } from "../shared/types";
+import { cacheExists, getCachePath, readCache, writeCache } from "../shared/utils/cache";
+import { normalizeYearMonths } from "../shared/utils/year-month";
 import * as fs from "fs";
 
 const DESTINATIONS_CACHE = "destinations.json";

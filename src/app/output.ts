@@ -1,13 +1,13 @@
 import * as fs from "fs";
 import * as path from "path";
-import { Destination, MonthData } from "../types";
-import { writeOutput } from "../utils/cache";
-import { mergeMonthData } from "../utils/month-data";
+import { Destination, MonthData } from "../shared/types";
+import { writeOutput } from "../shared/utils/cache";
+import { mergeMonthData } from "../shared/utils/month-data";
 
 function loadReportTemplate(): string {
   const candidates = [
     path.resolve(__dirname, "templates/report.html"),
-    path.resolve(__dirname, "../../src/report/templates/report.html"),
+    path.resolve(__dirname, "../../src/app/templates/report.html"),
   ];
 
   for (const templatePath of candidates) {
@@ -22,9 +22,9 @@ function loadReportTemplate(): string {
 function copyStaticAssets(): void {
   const staticFiles = ["style.css", "app.js", "favicon.svg"];
 
-  // At runtime __dirname is dist/report/. Source assets live in src/report/.
+  // At runtime __dirname is dist/app/. Source assets live in src/app/.
   const candidates = [
-    path.resolve(__dirname, "../../src/report"),
+    path.resolve(__dirname, "../../src/app"),
     __dirname,
   ];
 

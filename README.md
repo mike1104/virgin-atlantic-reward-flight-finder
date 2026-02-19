@@ -130,21 +130,24 @@ All cache files live under `cache/`.
 ```text
 src/
 ├── cli.ts
-├── types.ts
-├── scrape/
+├── scraper/
 │   ├── destinations.ts
 │   └── month.ts
-├── report/
+├── app/
 │   ├── output.ts
-│   ├── templates/
-│   │   └── report.eta
 │   ├── app.js
-│   └── style.css
-├── compute/
-│   └── returns.ts
-└── utils/
-    ├── cache.ts
-    └── dates.ts
+│   ├── style.css
+│   ├── favicon.svg
+│   └── templates/
+│       └── report.html
+└── shared/
+    ├── types.ts
+    └── utils/
+        ├── cache.ts
+        ├── dates.ts
+        ├── env.ts
+        ├── month-data.ts
+        └── year-month.ts
 ```
 
 ## License

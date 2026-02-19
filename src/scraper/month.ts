@@ -1,8 +1,8 @@
 import * as fs from "fs";
 import { APIRequestContext, Browser, Page } from "playwright";
-import { MonthData } from "../types";
-import { readCache, writeCache, cacheExists, getCachePath } from "../utils/cache";
-import { getMonthCacheFilename, hasMissingSeatCounts } from "../utils/month-data";
+import { MonthData } from "../shared/types";
+import { readCache, writeCache, cacheExists, getCachePath } from "../shared/utils/cache";
+import { getMonthCacheFilename, hasMissingSeatCounts } from "../shared/utils/month-data";
 
 const CACHE_MAX_AGE_MS = 60 * 60 * 1000; // 1 hour
 const REWARD_SEAT_CHECKER_API_URL = "https://www.virginatlantic.com/travelplus/reward-seat-checker-api/";
