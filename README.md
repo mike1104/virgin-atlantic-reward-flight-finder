@@ -1,33 +1,21 @@
 # Virgin Atlantic Reward Return Optimizer
 
-A TypeScript CLI that scrapes Virgin Atlantic reward-flight availability from the public Reward Flight Finder flow, caches it locally, and generates an interactive HTML report for round-trip planning from London Heathrow (`LHR`).
+TypeScript CLI + static web report for scraping Virgin Atlantic reward-seat availability and exploring round-trip options.
 
-## Features
+## What it does
 
-- Scrapes destinations directly from the Virgin Atlantic landing page each run.
-- Scrapes outbound and inbound monthly availability data.
-- Supports Economy, Premium, and Upper cabin combinations.
-- Stores richer per-day metadata for future analysis:
-  - points by cabin
-  - seat counts by cabin
-  - seat-count display strings (for example `9+`)
-  - saver flags per cabin
-  - `minPrice`, `currency`, and `minAwardPointsTotal`
-  - per-day `scrapedAt` timestamps
-- Generates an interactive report with:
-  - destination/date/night/cabin filters
-  - traveler count filtering that enforces seat availability
-  - points balance and bonus top-up modeling
-  - sortable columns (including scrape staleness)
-  - pagination and deep-linkable filters via URL hash
-  - direct search links to Virgin Atlantic booking flow
+- Scrapes available routes and route-specific month ranges from Virgin Atlantic Reward Flight Finder.
+- Fetches monthly outbound/inbound reward availability with seat counts and saver flags.
+- Caches raw and processed data locally.
+- Builds a static report (`output/index.html`) with client-side filters and sorting.
+- Shows one global `Last scrape completed` timestamp from `output/scrape-metadata.json`.
 
 ## Requirements
 
 - Node.js 18+
 - npm
 
-## Installation
+## Setup
 
 ```bash
 npm install
@@ -35,111 +23,88 @@ npx playwright install chromium
 npm run compile
 ```
 
-## Usage
+## CLI commands
 
-The CLI commands are:
+- `scrape`: scrape and cache only.
+- `process`: build output JSON files from cache (scrapes first if needed).
+- `build`: copy HTML/CSS/JS shell to `output/`.
+- `all` (default): `scrape -> process -> build`.
 
-- `scrape`: fetch data and write cache only
-- `process`: build UI data file (`output/flights-data.js`) from cache
-- `build`: build report shell (`report.html`, `app.js`, `style.css`)
-- `all` (default): run `scrape -> process -> build`
-
-### Basic
+Examples:
 
 ```bash
-# Default command is all
-npm run dev
-
-# Explicit full pipeline
 npm run all
-```
-
-### Scrape Specific Destinations
-
-```bash
-npm run scrape -- JFK LAX SFO
-```
-
-### Process From Cache (Implicit Scrape If Needed)
-
-```bash
-npm run process
-npm run process -- JFK LAX
-```
-
-### No-Cache Processing (Force Fresh Scrape First)
-
-```bash
+npm run scrape -- JFK LAX
 npm run process -- --no-cache
-npm run process -- --no-cache JFK
-```
-
-### Build Report Shell Without Scraping
-
-```bash
 npm run build
 ```
 
-## CLI Options
+Route filters accept either:
 
-- `--no-cache`: force a fresh scrape before processing/building
-- `<DEST> [DEST...]`: optional list of destination codes to include (for example `JFK LAX`)
+- route keys (`LHR-JFK`)
+- airport codes (`JFK`)
 
-## How Data Is Selected
+## Output files
 
-1. Destination list is always scraped from the Reward Flight Finder landing page.
-2. If destination-specific month availability is present on the page, those months are used.
-3. If not, the scraper falls back to the next 12 months for that destination.
-4. Outbound (`LHR -> DEST`) and inbound (`DEST -> LHR`) data are both collected.
+- `output/index.html`
+- `output/app.js`
+- `output/data-contracts.js`
+- `output/style.css`
+- `output/favicon.svg`
+- `output/flights-data.json`
+- `output/destinations.json`
+- `output/scrape-metadata.json`
 
-## Report Behavior
+## Cache files
 
-- Traveler count impacts:
-  - total points (multiplied by travelers)
-  - eligibility (rows are excluded if either leg has fewer seats than selected travelers)
-- Scrape freshness is shown as relative age, with exact outbound/inbound scrape times in tooltips.
-- Filtering and sort state are persisted in the URL hash.
+Stored in `cache/` with schema-versioned envelopes:
 
-## Cache Layout
+- `aggregates/destinations.json`
+- `aggregates/scrape-metadata.json`
+- `aggregates/flights-dataset.json`
+- `raw-months/{ORIGIN}-{DEST}-{YEAR}-{MONTH}.json`
 
-All cache files live under `cache/`.
+## Quality checks
 
-- `destinations.json`: latest destination discovery payload
-- `scrape-metadata.json`: metadata for the last successful scrape run
-- `flights-dataset.json`: consolidated route data used by processing/build steps
-- `{DEST}-{outbound|inbound}-{YEAR}-{MONTH}.json`: per-month raw day-level data
+- `npm run compile`
+- `npm run typecheck`
+- `npm run lint`
+- `npm run test`
 
-`output/` contains generated artifacts:
+PRs run `.github/workflows/ci.yml` (compile + lint + tests).
 
-- `report.html`
-- `flights-data.js`
-- copied static assets (`app.js`, `style.css`)
+## Deployment workflows
 
-## Scripts
+- `.github/workflows/scrape.yml`
+  - scheduled/manual scrape
+  - uploads a durable `scraped-data` artifact
+  - deploys latest scrape output to GitHub Pages
+- `.github/workflows/deploy.yml`
+  - on `main` pushes
+  - builds latest shell from code
+  - downloads latest successful `scraped-data` artifact from `scrape.yml`
+  - deploys combined shell + data
 
-- `npm run compile` -> TypeScript compile
-- `npm run scrape` -> compile + run `scrape`
-- `npm run process` -> compile + run `process`
-- `npm run build` -> compile + run CLI `build`
-- `npm run all` -> compile + run full pipeline
-- `npm run dev` -> compile + run default CLI path
-- `npm run start` -> run compiled CLI from `dist/`
-
-## Project Structure
+## Project layout
 
 ```text
 src/
 ├── cli.ts
+├── cli/
+│   ├── cache-data.ts
+│   ├── filters.ts
+│   ├── options.ts
+│   └── progress.ts
 ├── scraper/
 │   ├── destinations.ts
 │   └── month.ts
 ├── app/
-│   ├── output.ts
 │   ├── app.js
+│   ├── data-contracts.js
+│   ├── output.ts
 │   ├── style.css
 │   ├── favicon.svg
-│   └── templates/
-│       └── report.html
+│   └── templates/report.html
 └── shared/
     ├── types.ts
     └── utils/
@@ -147,6 +112,7 @@ src/
         ├── dates.ts
         ├── env.ts
         ├── month-data.ts
+        ├── validation.ts
         └── year-month.ts
 ```
 

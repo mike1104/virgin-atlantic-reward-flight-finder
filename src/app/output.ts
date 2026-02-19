@@ -20,7 +20,7 @@ function loadReportTemplate(): string {
 }
 
 function copyStaticAssets(): void {
-  const staticFiles = ["style.css", "app.js", "favicon.svg"];
+  const staticFiles = ["style.css", "app.js", "data-contracts.js", "favicon.svg"];
 
   // At runtime __dirname is dist/app/. Source assets live in src/app/.
   const candidates = [

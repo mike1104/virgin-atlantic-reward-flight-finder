@@ -36,6 +36,26 @@ export type MonthData = {
   };
 };
 
+export type RouteMonthData = {
+  outbound: MonthData[];
+  inbound: MonthData[];
+};
+
+export type DestinationDataByCode = Record<string, RouteMonthData>;
+
+export type ScrapeManifest = {
+  destinations: Destination[];
+  months: YearMonth[];
+  destinationMonths?: Record<string, YearMonth[]>;
+  scrapedAt: string;
+};
+
+export type ScrapeMetadata = {
+  scrapedAt: string;
+};
+
+export type FlightsOutputData = Record<string, { outbound: MonthData; inbound: MonthData }>;
+
 export type CabinType = "economy" | "premium" | "upper";
 
 export type ApiSeatData = {

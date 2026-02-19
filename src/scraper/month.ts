@@ -3,6 +3,7 @@ import { APIRequestContext, Browser, Page } from "playwright";
 import { MonthData } from "../shared/types";
 import { readCache, writeCache, cacheExists, getCachePath } from "../shared/utils/cache";
 import { getMonthCacheFilename, hasMissingSeatCounts } from "../shared/utils/month-data";
+import { isMonthData } from "../shared/utils/validation";
 
 const CACHE_MAX_AGE_MS = 60 * 60 * 1000; // 1 hour
 const REWARD_SEAT_CHECKER_API_URL = "https://www.virginatlantic.com/travelplus/reward-seat-checker-api/";
@@ -241,13 +242,18 @@ export async function scrapeMonth(
   const cacheFilename = getMonthCacheFilename(origin, destination, year, month);
 
   if (!refresh && cacheExists(cacheFilename)) {
-    const cached = readCache<MonthData>(cacheFilename);
+    const cached = readCache<MonthData>(cacheFilename, {
+      validator: isMonthData,
+      description: `month cache ${cacheFilename}`,
+    });
     if (cached) {
       const cachePath = getCachePath(cacheFilename);
       const cacheStat = fs.statSync(cachePath);
       const cacheAgeMs = Date.now() - cacheStat.mtime.getTime();
       if (cacheAgeMs > CACHE_MAX_AGE_MS) {
-        logMonthRequestDetail(`  ↻ Refreshing ${origin} → ${destination} ${year}-${month} (cache older than 1 hour)`);
+        logMonthRequestDetail(
+          `  ↻ Refreshing ${origin} → ${destination} ${year}-${month} (cache older than 1 hour)`
+        );
       } else if (hasMissingSeatCounts(cached)) {
         logMonthRequestDetail(`  ↻ Refreshing ${origin} → ${destination} ${year}-${month} to capture seat counts`);
       } else {

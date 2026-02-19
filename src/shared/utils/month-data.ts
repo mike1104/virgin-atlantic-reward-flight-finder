@@ -1,4 +1,5 @@
 import { MonthData } from "../types";
+import { CACHE_RAW_MONTHS_PREFIX } from "./cache";
 
 export function getMonthCacheFilename(
   origin: string,
@@ -6,7 +7,7 @@ export function getMonthCacheFilename(
   year: string,
   month: string
 ): string {
-  return `${origin}-${destination}-${year}-${month}.json`;
+  return `${CACHE_RAW_MONTHS_PREFIX}${origin}-${destination}-${year}-${month}.json`;
 }
 
 export function hasMissingSeatCounts(monthData: MonthData): boolean {

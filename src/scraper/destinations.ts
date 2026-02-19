@@ -1,10 +1,17 @@
 import { Page } from "playwright";
 import { Destination, YearMonth } from "../shared/types";
-import { cacheExists, getCachePath, readCache, writeCache } from "../shared/utils/cache";
+import {
+  cacheExists,
+  CACHE_AGGREGATES_PREFIX,
+  getCachePath,
+  readCache,
+  writeCache,
+} from "../shared/utils/cache";
 import { normalizeYearMonths } from "../shared/utils/year-month";
+import { isDestinationArray } from "../shared/utils/validation";
 import * as fs from "fs";
 
-const DESTINATIONS_CACHE = "destinations.json";
+const DESTINATIONS_CACHE = `${CACHE_AGGREGATES_PREFIX}destinations.json`;
 const DESTINATION_POPULATION_TIMEOUT_MS = 1500;
 const DESTINATION_POPULATION_POLL_MS = 100;
 const DESTINATIONS_CACHE_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;
@@ -55,7 +62,10 @@ async function waitForDestinationOptions(page: Page): Promise<boolean> {
 
 function loadDestinationsFromCache(forceRefresh: boolean): Destination[] | null {
   if (forceRefresh || !cacheExists(DESTINATIONS_CACHE)) return null;
-  const cached = readCache<Destination[]>(DESTINATIONS_CACHE);
+  const cached = readCache<Destination[]>(DESTINATIONS_CACHE, {
+    validator: isDestinationArray,
+    description: "destinations cache",
+  });
   if (!cached || cached.length === 0) return null;
 
   try {

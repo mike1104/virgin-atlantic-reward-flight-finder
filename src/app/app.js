@@ -6,6 +6,20 @@ var ROUTES_BY_OD = {};
 var ORIGIN_OPTIONS = [];
 var LAST_SCRAPE_COMPLETED_AT = null;
 
+function queryElement(selector) {
+  return document.querySelector(selector);
+}
+
+function bindEvent(selector, eventName, handler) {
+  var el = queryElement(selector);
+  if (!el) {
+    console.warn('Missing expected element for selector:', selector);
+    return false;
+  }
+  el.addEventListener(eventName, handler);
+  return true;
+}
+
 // ===== Utility functions =====
 function addDays(dateStr, days) {
   var d = new Date(dateStr);
@@ -552,6 +566,7 @@ function computeCombos(routeRef, filters) {
           var outPts = outPricing[outCabin] * filters.adults;
           var inPts = inPricing[inCabin] * filters.adults;
           var totalPts = outPts + inPts;
+          var routeMeta = (routeRef && typeof routeRef === 'object') ? routeRef : null;
 
           combos.push({
             depart: departDate,
@@ -569,7 +584,13 @@ function computeCombos(routeRef, filters) {
             outIsSaver: outIsSaver,
             inIsSaver: inIsSaver,
             remainingSeats: remainingSeats,
-            remainingSeatsDisplay: remainingSeatsDisplay
+            remainingSeatsDisplay: remainingSeatsDisplay,
+            dest: routeMeta ? routeMeta.routeCode : routeCode,
+            destLabel: routeMeta
+              ? (routeMeta.routeLabel || (routeMeta.originName + ' -> ' + routeMeta.destinationName))
+              : routeCode,
+            originCode: routeMeta ? routeMeta.originCode : null,
+            destinationCode: routeMeta ? routeMeta.destinationCode : null
           });
         }
       }
@@ -775,16 +796,7 @@ function render() {
       comboCache[comboCacheKey] = computeCombos(routeRef, filters);
     }
     var destCombos = comboCache[comboCacheKey];
-    for (var ci = 0; ci < destCombos.length; ci++) {
-      var src = destCombos[ci];
-      var combo = {};
-      for (var k in src) combo[k] = src[k];
-      combo.dest = routeRef.routeCode;
-      combo.destLabel = routeRef.routeLabel || (routeRef.originName + ' -> ' + routeRef.destinationName);
-      combo.originCode = routeRef.originCode;
-      combo.destinationCode = routeRef.destinationCode;
-      combos.push(combo);
-    }
+    for (var ci = 0; ci < destCombos.length; ci++) combos.push(destCombos[ci]);
   }
 
   var ss = sortState['_global'] || { column: 'totalPoints', direction: 'asc' };
@@ -1230,11 +1242,13 @@ function initApp() {
     });
   }
 
-  destToggle.addEventListener('click', function(e) {
-    e.stopPropagation();
-    destDropdown.classList.toggle('open');
-    if (fromDropdown) fromDropdown.classList.remove('open');
-  });
+  if (destToggle && destDropdown) {
+    destToggle.addEventListener('click', function(e) {
+      e.stopPropagation();
+      destDropdown.classList.toggle('open');
+      if (fromDropdown) fromDropdown.classList.remove('open');
+    });
+  }
 
   document.addEventListener('click', function(e) {
     if (!e.target.closest('.from-multiselect') && fromDropdown) {
@@ -1262,16 +1276,16 @@ function initApp() {
   }
 
   // Filter listeners - these invalidate combo cache
-  document.querySelector('.cabin-min').addEventListener('change', invalidateAndRender);
-  document.querySelector('.nights-min').addEventListener('input', invalidateAndRender);
-  document.querySelector('.nights-max').addEventListener('input', invalidateAndRender);
-  document.querySelector('.date-start').addEventListener('input', invalidateAndRender);
-  document.querySelector('.date-end').addEventListener('input', invalidateAndRender);
-  document.querySelector('.adults-count').addEventListener('input', invalidateAndRender);
+  bindEvent('.cabin-min', 'change', invalidateAndRender);
+  bindEvent('.nights-min', 'input', invalidateAndRender);
+  bindEvent('.nights-max', 'input', invalidateAndRender);
+  bindEvent('.date-start', 'input', invalidateAndRender);
+  bindEvent('.date-end', 'input', invalidateAndRender);
+  bindEvent('.adults-count', 'input', invalidateAndRender);
 
   // These only affect display, not combos
-  document.querySelector('.points-balance').addEventListener('input', function() { saveFiltersToHash(); render(); });
-  document.querySelector('.bonus-rate').addEventListener('input', function() { saveFiltersToHash(); render(); });
+  bindEvent('.points-balance', 'input', function() { saveFiltersToHash(); render(); });
+  bindEvent('.bonus-rate', 'input', function() { saveFiltersToHash(); render(); });
 
   // Sorting
   document.querySelectorAll('.results-table th.sortable').forEach(function(header) {
@@ -1294,7 +1308,7 @@ function initApp() {
   });
 
   // Pagination controls
-  document.querySelector('.prev-btn').addEventListener('click', function() {
+  bindEvent('.prev-btn', 'click', function() {
     var state = paginationState['_global'];
     if (state && state.currentPage > 1) {
       state.currentPage--;
@@ -1302,7 +1316,7 @@ function initApp() {
     }
   });
 
-  document.querySelector('.next-btn').addEventListener('click', function() {
+  bindEvent('.next-btn', 'click', function() {
     var state = paginationState['_global'];
     if (state) {
       state.currentPage++;
@@ -1310,7 +1324,7 @@ function initApp() {
     }
   });
 
-  document.querySelector('.rows-per-page').addEventListener('change', function() {
+  bindEvent('.rows-per-page', 'change', function() {
     var state = paginationState['_global'] || { currentPage: 1, rowsPerPage: 50 };
     state.rowsPerPage = parseInt(this.value);
     state.currentPage = 1;
@@ -1343,14 +1357,30 @@ document.addEventListener('DOMContentLoaded', function() {
       .catch(function() { return null; })
   ])
     .then(function(results) {
-      RAW_DATA = results[0] || {};
-      DESTINATIONS_META = Array.isArray(results[1]) ? results[1] : [];
-      LAST_SCRAPE_COMPLETED_AT = results[2] && typeof results[2].scrapedAt === 'string'
-        ? results[2].scrapedAt
+      var contracts = window.__appContracts || {};
+      var flightsData = results[0];
+      var destinationsMeta = results[1];
+      var scrapeMetadata = results[2];
+
+      if (contracts.isFlightsData && !contracts.isFlightsData(flightsData)) {
+        throw new Error('Invalid flights-data.json payload');
+      }
+      if (contracts.isDestinationsMeta && !contracts.isDestinationsMeta(destinationsMeta)) {
+        throw new Error('Invalid destinations.json payload');
+      }
+      if (scrapeMetadata !== null && contracts.isScrapeMetadata && !contracts.isScrapeMetadata(scrapeMetadata)) {
+        throw new Error('Invalid scrape-metadata.json payload');
+      }
+
+      RAW_DATA = flightsData || {};
+      DESTINATIONS_META = Array.isArray(destinationsMeta) ? destinationsMeta : [];
+      LAST_SCRAPE_COMPLETED_AT = scrapeMetadata && typeof scrapeMetadata.scrapedAt === 'string'
+        ? scrapeMetadata.scrapedAt
         : null;
       initApp();
     })
-    .catch(function() {
+    .catch(function(error) {
+      console.error('Failed to initialize app:', error);
       document.querySelector('.results-area').innerHTML =
         '<p class="no-data-message">No flight data available yet. Run a scrape first or wait for the next scheduled update.</p>';
     });

@@ -1,127 +1,39 @@
 #!/usr/bin/env node
 
 import * as fs from "fs";
-import * as readline from "readline";
 import { chromium } from "playwright";
 import { writeReportData, writeDestinationMetadata, writeScrapeMetadata, buildReportShell } from "./app/output";
+import {
+  loadDestinationDataFromCache,
+  loadScrapeMetadata,
+  serializeDestinationData,
+} from "./cli/cache-data";
+import { filterDestinationData, filterDestinationsMetadata, filterRoutes, getRouteEndpoints, isRouteCode } from "./cli/filters";
+import { parseCliOptions, printUsage } from "./cli/options";
+import { formatDuration, ScrapeProgressBar } from "./cli/progress";
 import { scrapeDestinations } from "./scraper/destinations";
 import { scrapeMonth } from "./scraper/month";
-import { Destination, MonthData, YearMonth } from "./shared/types";
-import { cacheExists, ensureDirs, getCachePath, readCache, writeCache } from "./shared/utils/cache";
+import { Destination, MonthData, RouteMonthData, ScrapeManifest, YearMonth } from "./shared/types";
+import {
+  cacheExists,
+  CACHE_AGGREGATES_PREFIX,
+  ensureDirs,
+  getCachePath,
+  readCache,
+  writeCache,
+} from "./shared/utils/cache";
 import { getNext12Months } from "./shared/utils/dates";
 import { getNonNegativeIntEnv, getPositiveIntEnv } from "./shared/utils/env";
 import { getMonthCacheFilename, hasMissingSeatCounts } from "./shared/utils/month-data";
+import { isMonthData } from "./shared/utils/validation";
 import { normalizeYearMonths } from "./shared/utils/year-month";
 
-type ScrapeManifest = {
-  destinations: Destination[];
-  months: YearMonth[];
-  destinationMonths?: Record<string, YearMonth[]>;
-  scrapedAt: string;
-};
-
-type DestinationDataByCode = Record<string, { outbound: MonthData[]; inbound: MonthData[] }>;
-
-type CliOptions = {
-  noCache: boolean;
-  requestedRoutes: string[];
-};
-
-const SCRAPE_METADATA_CACHE = "scrape-metadata.json";
-const FLIGHTS_DATASET_CACHE = "flights-dataset.json";
+const SCRAPE_METADATA_CACHE = `${CACHE_AGGREGATES_PREFIX}scrape-metadata.json`;
+const FLIGHTS_DATASET_CACHE = `${CACHE_AGGREGATES_PREFIX}flights-dataset.json`;
 const OUTPUT_FLIGHTS_DATA_FILE = "flights-data.json";
 const OUTPUT_DESTINATIONS_FILE = "destinations.json";
 const OUTPUT_SCRAPE_METADATA_FILE = "scrape-metadata.json";
 const OUTPUT_REPORT_FILE = "index.html";
-
-type ScrapeProgressSnapshot = {
-  completed: number;
-  successful: number;
-  empty: number;
-  failed: number;
-  fallbackUsed: number;
-  cached: number;
-};
-
-class ScrapeProgressBar {
-  private readonly enabled: boolean;
-  private lastLine = "";
-  private rendered = false;
-  private readonly startedAtMs: number;
-
-  constructor(private readonly total: number) {
-    this.enabled = process.stdout.isTTY === true && process.env.VA_PROGRESS_BAR !== "0";
-    this.startedAtMs = Date.now();
-  }
-
-  private msPerSuccess(successful: number, cached: number): string {
-    const nonCachedSuccesses = Math.max(successful - cached, 0);
-    if (nonCachedSuccesses <= 0) return "--";
-    const elapsedMs = Math.max(Date.now() - this.startedAtMs, 1);
-    return (elapsedMs / nonCachedSuccesses).toFixed(0);
-  }
-
-  private truncateToTerminal(line: string): string {
-    if (!this.enabled) return line;
-    const columns = process.stdout.columns || 120;
-    if (line.length < columns) return line;
-    return line.slice(0, Math.max(columns - 1, 1));
-  }
-
-  private writeLine(line: string): void {
-    const truncated = this.truncateToTerminal(line);
-    readline.clearLine(process.stdout, 0);
-    readline.cursorTo(process.stdout, 0);
-    process.stdout.write(truncated);
-  }
-
-  private buildLine(snapshot: ScrapeProgressSnapshot): string {
-    const percent = this.total === 0 ? 100 : Math.round((snapshot.completed / this.total) * 100);
-    const barWidth = 30;
-    const filled = Math.max(0, Math.min(barWidth, Math.round((percent / 100) * barWidth)));
-    const bar = `${"#".repeat(filled)}${"-".repeat(barWidth - filled)}`;
-    const msPerSuccess = this.msPerSuccess(snapshot.successful, snapshot.cached);
-    const avgText = msPerSuccess === "--" ? "--" : `${msPerSuccess}ms`;
-    return `  [${bar}] ${snapshot.completed}/${this.total} ${percent}% | ok:${snapshot.successful} empty:${snapshot.empty} fail:${snapshot.failed} fb:${snapshot.fallbackUsed} cache:${snapshot.cached} ok_avg:${avgText}`;
-  }
-
-  update(snapshot: ScrapeProgressSnapshot): void {
-    if (!this.enabled) {
-      const percent = this.total === 0 ? 100 : Math.round((snapshot.completed / this.total) * 100);
-      const msPerSuccess = this.msPerSuccess(snapshot.successful, snapshot.cached);
-      const avgText = msPerSuccess === "--" ? "--" : `${msPerSuccess}ms`;
-      console.log(
-        `  Progress ${snapshot.completed}/${this.total} (${percent}%) | ok:${snapshot.successful} empty:${snapshot.empty} failed:${snapshot.failed} fallback:${snapshot.fallbackUsed} cache:${snapshot.cached} ok_avg:${avgText}`
-      );
-      return;
-    }
-
-    this.lastLine = this.buildLine(snapshot);
-    this.writeLine(this.lastLine);
-    this.rendered = true;
-  }
-
-  log(message: string): void {
-    if (!this.enabled) {
-      console.log(message);
-      return;
-    }
-    if (!this.rendered) {
-      console.log(message);
-      return;
-    }
-    this.writeLine("");
-    process.stdout.write(`${message}\n`);
-    this.writeLine(this.lastLine);
-  }
-
-  finish(): void {
-    if (!this.enabled || !this.rendered) return;
-    this.writeLine(this.lastLine);
-    process.stdout.write("\n");
-    this.rendered = false;
-  }
-}
 
 function willUseMonthCache(
   refresh: boolean,
@@ -134,7 +46,10 @@ function willUseMonthCache(
   const cacheFilename = getMonthCacheFilename(origin, destination, year, month);
   if (!cacheExists(cacheFilename)) return false;
 
-  const cached = readCache<MonthData>(cacheFilename);
+  const cached = readCache<MonthData>(cacheFilename, {
+    validator: isMonthData,
+    description: `month cache ${cacheFilename}`,
+  });
   if (!cached) return false;
   if (hasMissingSeatCounts(cached)) return false;
 
@@ -145,139 +60,10 @@ function willUseMonthCache(
   return cacheAgeMs <= cacheMaxAgeMs;
 }
 
-function formatDuration(ms: number): string {
-  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  if (minutes === 0) return `${seconds}s`;
-  return `${minutes}m ${seconds}s`;
-}
-
-function printUsage(): void {
-  console.log(`Usage: virgin-atlantic-optimizer <command> [options]
-
-Commands:
-  scrape     Scrape reward flight data and save cache only
-  process    Build UI data file from cache (scrapes implicitly if needed)
-  build      Build report HTML/CSS/JS shell from cached metadata
-  all        Run scrape, process, and build (default)
-
-Options:
-  --no-cache                For process/all: force fresh scrape before processing
-  <ROUTE|AIRPORT> [...]     Restrict by route key (LHR-JFK) or airport code (JFK/LHR)
-`);
-}
-
-function parseCliOptions(args: string[]): CliOptions {
-  const noCache = args.includes("--no-cache");
-
-  const requestedRoutes: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg.startsWith("-")) continue;
-    requestedRoutes.push(arg.toUpperCase());
-  }
-
-  return { noCache, requestedRoutes };
-}
-
-function loadScrapeMetadata(): ScrapeManifest | null {
-  return readCache<ScrapeManifest>(SCRAPE_METADATA_CACHE);
-}
-
-function loadFlightsDatasetCache(): DestinationDataByCode | null {
-  return readCache<DestinationDataByCode>(FLIGHTS_DATASET_CACHE);
-}
-
-function isRouteCode(value: string): boolean {
-  return /^[A-Z]{3}-[A-Z]{3}$/.test(value);
-}
-
-function serializeDestinationData(
-  destinationData: Map<string, { outbound: MonthData[]; inbound: MonthData[] }>
-): DestinationDataByCode {
-  const serialized: DestinationDataByCode = {};
-  destinationData.forEach((value, code) => {
-    serialized[code] = value;
-  });
-  return serialized;
-}
-
-function deserializeDestinationData(
-  data: DestinationDataByCode
-): Map<string, { outbound: MonthData[]; inbound: MonthData[] }> {
-  return new Map(Object.entries(data));
-}
-
-function getRouteEndpoints(route: Destination): { originCode: string | null; destinationCode: string | null } {
-  const [fallbackOrigin, fallbackDestination] = route.code.split("-");
-  return {
-    originCode: (route.originCode || fallbackOrigin || "").toUpperCase() || null,
-    destinationCode: (route.destinationCode || fallbackDestination || "").toUpperCase() || null,
-  };
-}
-
-function routeMatchesAnyFilter(route: Destination, filters: string[]): boolean {
-  if (filters.length === 0) return true;
-  const routeCode = route.code.toUpperCase();
-  const endpoints = getRouteEndpoints(route);
-
-  for (const rawToken of filters) {
-    const token = rawToken.toUpperCase();
-    if (token.includes("-")) {
-      if (routeCode === token) return true;
-      continue;
-    }
-    if (
-      token.length === 3 &&
-      (endpoints.originCode === token || endpoints.destinationCode === token)
-    ) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function filterRoutes(routes: Destination[], filters: string[]): Destination[] {
-  if (filters.length === 0) return routes;
-  return routes.filter((route) => routeMatchesAnyFilter(route, filters));
-}
-
-function filterDestinationData(
-  destinationData: Map<string, { outbound: MonthData[]; inbound: MonthData[] }>,
-  routes: Destination[]
-): Map<string, { outbound: MonthData[]; inbound: MonthData[] }> {
-  if (routes.length === 0) return new Map<string, { outbound: MonthData[]; inbound: MonthData[] }>();
-  const allowedRouteCodes = new Set(routes.map((route) => route.code));
-  const filtered = new Map<string, { outbound: MonthData[]; inbound: MonthData[] }>();
-  destinationData.forEach((value, code) => {
-    if (allowedRouteCodes.has(code)) filtered.set(code, value);
-  });
-  return filtered;
-}
-
-function filterDestinationsMetadata(
-  destinations: Destination[],
-  destinationData: Map<string, { outbound: MonthData[]; inbound: MonthData[] }>
-): Destination[] {
-  const available = new Set(destinationData.keys());
-  return destinations.filter((destination) => available.has(destination.code));
-}
-
-function loadDestinationDataFromCache(): Map<string, { outbound: MonthData[]; inbound: MonthData[] }> {
-  const cachedDestinationData = loadFlightsDatasetCache();
-  if (!cachedDestinationData || Object.keys(cachedDestinationData).length === 0) {
-    return new Map<string, { outbound: MonthData[]; inbound: MonthData[] }>();
-  }
-
-  return deserializeDestinationData(cachedDestinationData);
-}
-
 async function scrapeToCache(
   requestedRoutes: string[],
   forceFresh: boolean
-): Promise<{ manifest: ScrapeManifest; destinationData: Map<string, { outbound: MonthData[]; inbound: MonthData[] }> }> {
+): Promise<{ manifest: ScrapeManifest; destinationData: Map<string, RouteMonthData> }> {
   const scrapeStartedAt = Date.now();
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
@@ -287,12 +73,8 @@ async function scrapeToCache(
     const targetRoutes = filterRoutes(allRoutes, requestedRoutes);
 
     if (targetRoutes.length === 0) {
-      console.error("❌ No valid routes found");
-      console.log("\nAvailable routes:");
-      allRoutes.forEach((route) => {
-        console.log(`  ${route.code} - ${route.name}`);
-      });
-      process.exit(1);
+      const available = allRoutes.map((route) => `${route.code} - ${route.name}`).join("\n  ");
+      throw new Error(`No valid routes found.\nAvailable routes:\n  ${available}`);
     }
 
     console.log(`📍 Searching ${targetRoutes.length} routes:`);
@@ -333,7 +115,7 @@ async function scrapeToCache(
       }>;
     };
 
-    const destinationData = new Map<string, { outbound: MonthData[]; inbound: MonthData[] }>();
+    const destinationData = new Map<string, RouteMonthData>();
     const routeStates = new Map<string, RouteScrapeState>();
     const requestQueueByKey = new Map<string, MonthQueueItem>();
 
@@ -419,8 +201,7 @@ async function scrapeToCache(
     );
 
     if (requestQueue.length === 0) {
-      console.log("\n❌ No valid routes with month requests to scrape\n");
-      process.exit(1);
+      throw new Error("No valid routes with month requests to scrape");
     }
 
     const request = page.context().request;
@@ -628,8 +409,7 @@ async function scrapeToCache(
     }
 
     if (destinationData.size === 0) {
-      console.log("\n❌ No data found for any route\n");
-      process.exit(1);
+      throw new Error("No data found for any route");
     }
 
     const scrapedAt = new Date().toISOString();
@@ -671,8 +451,10 @@ async function processCommand(args: string[]): Promise<void> {
   ensureDirs();
   const options = parseCliOptions(args);
 
-  let manifest = loadScrapeMetadata();
-  let destinationData = manifest ? loadDestinationDataFromCache() : new Map<string, { outbound: MonthData[]; inbound: MonthData[] }>();
+  let manifest = loadScrapeMetadata(SCRAPE_METADATA_CACHE);
+  let destinationData = manifest
+    ? loadDestinationDataFromCache(FLIGHTS_DATASET_CACHE)
+    : new Map<string, RouteMonthData>();
 
   const legacyManifestFormat = !!manifest && manifest.destinations.some((route) => !isRouteCode(route.code));
   const requestedFromManifest = manifest ? filterRoutes(manifest.destinations, options.requestedRoutes) : [];
@@ -691,8 +473,7 @@ async function processCommand(args: string[]): Promise<void> {
   }
 
   if (!manifest) {
-    console.error("❌ No scrape metadata available.");
-    process.exit(1);
+    throw new Error("No scrape metadata available.");
   }
 
   const scopedRoutes = filterRoutes(manifest.destinations, options.requestedRoutes);
@@ -700,8 +481,7 @@ async function processCommand(args: string[]): Promise<void> {
   const filteredDestinationData = filterDestinationData(destinationData, routesToProcess);
 
   if (filteredDestinationData.size === 0) {
-    console.error("❌ No data available for requested routes.");
-    process.exit(1);
+    throw new Error("No data available for requested routes.");
   }
 
   writeReportData(filteredDestinationData, OUTPUT_FLIGHTS_DATA_FILE);
@@ -776,6 +556,7 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.error("Fatal error:", error);
+  const message = error instanceof Error ? error.message : String(error);
+  console.error("Fatal error:", message);
   process.exit(1);
 });

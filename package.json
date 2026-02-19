@@ -5,6 +5,9 @@
   "main": "dist/cli.js",
   "scripts": {
     "compile": "tsc",
+    "typecheck": "tsc --noEmit",
+    "lint": "node scripts/lint.js && npm run typecheck",
+    "test": "node --test tests",
     "build": "npm run compile && node dist/cli.js build",
     "start": "node dist/cli.js",
     "scrape": "npm run compile && node dist/cli.js scrape",
