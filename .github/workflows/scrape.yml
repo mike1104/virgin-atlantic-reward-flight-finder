@@ -2,7 +2,7 @@ name: Scrape
 
 on:
   schedule:
-    - cron: "0 */6 * * *" # Every 6 hours
+    - cron: "0 */3 * * *" # Every 6 hours
   workflow_dispatch: # Manual trigger
 
 permissions:
@@ -36,8 +36,9 @@ jobs:
       - name: Scrape, process, and build
         run: node dist/cli.js all
         env:
-          VA_DESTINATION_CONCURRENCY: "1"
-          VA_MONTH_REQUEST_CONCURRENCY: "12"
+          VA_REQUEST_MAX_IN_FLIGHT: "8"
+          VA_REQUEST_DISPATCH_INTERVAL_MS: "100"
+          VA_REQUEST_DISPATCH_INTERVAL_JITTER_MS: "10"
 
       - name: Cache flight data
         uses: actions/cache/save@v4

@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { Destination, MonthData } from "../types";
 import { writeOutput } from "../utils/cache";
+import { mergeMonthData } from "../utils/month-data";
 
 function loadReportTemplate(): string {
   const candidates = [
@@ -16,16 +17,6 @@ function loadReportTemplate(): string {
   }
 
   throw new Error("Could not find report template file (report.html)");
-}
-
-function mergeMonthData(monthDataArray: MonthData[]): MonthData {
-  const merged: MonthData = {};
-  for (const monthData of monthDataArray) {
-    for (const [date, pricing] of Object.entries(monthData)) {
-      merged[date] = pricing;
-    }
-  }
-  return merged;
 }
 
 function copyStaticAssets(): void {
@@ -89,13 +80,4 @@ export function buildReportShell(
 
   const templateSrc = loadReportTemplate();
   writeOutput(outputFilename, templateSrc);
-}
-
-export function generateReportArtifacts(
-  destinationData: DestinationDataMap,
-  outputFilename: string = "index.html"
-): void {
-  writeReportData(destinationData, "flights-data.json");
-  buildReportShell(outputFilename);
-  console.log(`\nReport generated: output/${outputFilename}`);
 }

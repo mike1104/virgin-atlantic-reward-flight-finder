@@ -1,25 +1,45 @@
 import * as fs from "fs";
-import { Page } from "playwright";
-import { MonthData, ApiMonthResponse, YearMonth } from "../types";
+import { APIRequestContext, Browser, Page } from "playwright";
+import { MonthData } from "../types";
 import { readCache, writeCache, cacheExists, getCachePath } from "../utils/cache";
+import { getMonthCacheFilename, hasMissingSeatCounts } from "../utils/month-data";
 
 const CACHE_MAX_AGE_MS = 60 * 60 * 1000; // 1 hour
+const REWARD_SEAT_CHECKER_API_URL = "https://www.virginatlantic.com/travelplus/reward-seat-checker-api/";
+const DIRECT_API_RETRY_DELAY_MS = 300;
+const VERBOSE_MONTH_REQUEST_LOGS = process.env.VA_VERBOSE_MONTH_REQUEST_LOGS === "1";
+const MONTH_NAMES = [
+  "JANUARY",
+  "FEBRUARY",
+  "MARCH",
+  "APRIL",
+  "MAY",
+  "JUNE",
+  "JULY",
+  "AUGUST",
+  "SEPTEMBER",
+  "OCTOBER",
+  "NOVEMBER",
+  "DECEMBER",
+];
 
-function getPositiveIntEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (!raw) return fallback;
-  const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed < 1) return fallback;
-  return parsed;
+type FetchMonthResult = {
+  monthData: MonthData;
+  status: "success" | "empty" | "failed";
+  failReason?: string;
+  usedFallback?: boolean;
+  fromCache?: boolean;
+};
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
 }
 
-function getMonthCacheFilename(
-  origin: string,
-  destination: string,
-  year: string,
-  month: string
-): string {
-  return `${origin}-${destination}-${year}-${month}.json`;
+function logMonthRequestDetail(message: string): void {
+  if (VERBOSE_MONTH_REQUEST_LOGS) {
+    console.log(message);
+  }
 }
 
 function addMissingScrapeTimestamps(
@@ -39,133 +59,205 @@ function addMissingScrapeTimestamps(
   return { monthData, mutated };
 }
 
-function hasMissingSeatCounts(monthData: MonthData): boolean {
-  for (const day of Object.values(monthData)) {
-    if (day.economy !== undefined && day.economySeats === undefined) return true;
-    if (day.premium !== undefined && day.premiumSeats === undefined) return true;
-    if (day.upper !== undefined && day.upperSeats === undefined) return true;
+function buildMonthDataFromApiPayload(apiResponseRaw: unknown, scrapedAt: string): FetchMonthResult {
+  if (!Array.isArray(apiResponseRaw)) {
+    return { monthData: {}, status: "failed" };
   }
-  return false;
+  if (apiResponseRaw.length === 0) {
+    return { monthData: {}, status: "empty" };
+  }
+
+  const first = apiResponseRaw[0] as any;
+  const pointsDays: any[] = Array.isArray(first?.pointsDays)
+    ? first.pointsDays
+    : apiResponseRaw;
+  if (!Array.isArray(pointsDays)) {
+    return { monthData: {}, status: "failed" };
+  }
+
+  const monthData: MonthData = {};
+  for (const day of pointsDays) {
+    if (!day || !day.seats) continue;
+
+    const dateStr = day.date;
+    monthData[dateStr] = {
+      scrapedAt,
+      minPrice: day.minPrice ?? null,
+      currency: day.currency ?? null,
+      minAwardPointsTotal: day.minAwardPointsTotal ?? 0,
+    };
+
+    if (day.seats.awardEconomy && day.seats.awardEconomy.cabinPointsValue > 0) {
+      monthData[dateStr].economy = day.seats.awardEconomy.cabinPointsValue;
+      monthData[dateStr].economySeats = day.seats.awardEconomy.cabinClassSeatCount;
+      monthData[dateStr].economySeatsDisplay = day.seats.awardEconomy.cabinClassSeatCountString;
+      monthData[dateStr].economyIsSaver = day.seats.awardEconomy.isSaverAward;
+    }
+
+    if (day.seats.awardComfortPlusPremiumEconomy && day.seats.awardComfortPlusPremiumEconomy.cabinPointsValue > 0) {
+      monthData[dateStr].premium = day.seats.awardComfortPlusPremiumEconomy.cabinPointsValue;
+      monthData[dateStr].premiumSeats = day.seats.awardComfortPlusPremiumEconomy.cabinClassSeatCount;
+      monthData[dateStr].premiumSeatsDisplay = day.seats.awardComfortPlusPremiumEconomy.cabinClassSeatCountString;
+      monthData[dateStr].premiumIsSaver = day.seats.awardComfortPlusPremiumEconomy.isSaverAward;
+    }
+
+    if (day.seats.awardBusiness && day.seats.awardBusiness.cabinPointsValue > 0) {
+      monthData[dateStr].upper = day.seats.awardBusiness.cabinPointsValue;
+      monthData[dateStr].upperSeats = day.seats.awardBusiness.cabinClassSeatCount;
+      monthData[dateStr].upperSeatsDisplay = day.seats.awardBusiness.cabinClassSeatCountString;
+      monthData[dateStr].upperIsSaver = day.seats.awardBusiness.isSaverAward;
+    }
+  }
+
+  return {
+    monthData,
+    status: Object.keys(monthData).length > 0 ? "success" : "empty",
+  };
 }
 
-async function fetchMonthDataWithPage(
+async function fetchMonthDataWithRequest(
+  request: APIRequestContext,
+  origin: string,
+  destination: string,
+  month: string,
+  year: string
+): Promise<FetchMonthResult> {
+  try {
+    const scrapedAt = new Date().toISOString();
+    const monthNum = Number(month);
+    const monthName = Number.isInteger(monthNum) && monthNum >= 1 && monthNum <= 12
+      ? MONTH_NAMES[monthNum - 1]
+      : null;
+    const yearNum = Number(year);
+    if (!monthName || !Number.isInteger(yearNum)) {
+      return { monthData: {}, status: "failed", failReason: "invalid month/year" };
+    }
+    const monthPadded = String(monthNum).padStart(2, "0");
+    const departure = `${year}-${monthPadded}-01`;
+    const referer = `https://www.virginatlantic.com/reward-flight-finder/results/month?origin=${origin}&destination=${destination}&month=${monthPadded}&year=${year}`;
+
+    const response = await request.post(REWARD_SEAT_CHECKER_API_URL, {
+      data: {
+        slice: {
+          origin,
+          destination,
+          departure,
+        },
+        passengers: ["ADULT"],
+        permittedCarriers: ["VS"],
+        years: [yearNum],
+        months: [monthName],
+      },
+      headers: {
+        "content-type": "application/json",
+        referer,
+      },
+      timeout: 60000,
+    });
+    if (!response.ok()) {
+      const status = response.status();
+      const statusText = response.statusText().trim();
+      let responseSnippet = "";
+      try {
+        responseSnippet = (await response.text()).replace(/\s+/g, " ").trim().slice(0, 140);
+      } catch {
+        // Body can be unavailable for blocked/terminated requests.
+      }
+
+      const reason =
+        responseSnippet.length > 0
+          ? `HTTP ${status}${statusText ? ` ${statusText}` : ""} - ${responseSnippet}`
+          : `HTTP ${status}${statusText ? ` ${statusText}` : ""}`;
+      return { monthData: {}, status: "failed", failReason: reason };
+    }
+
+    const apiResponseRaw = await response.json();
+    return buildMonthDataFromApiPayload(apiResponseRaw, scrapedAt);
+  } catch (error) {
+    return { monthData: {}, status: "failed", failReason: getErrorMessage(error) };
+  }
+}
+
+async function fetchMonthDataWithPageFallback(
   page: Page,
   origin: string,
   destination: string,
   month: string,
   year: string
-): Promise<MonthData> {
+): Promise<FetchMonthResult> {
   try {
     const scrapedAt = new Date().toISOString();
-    // Navigate to the monthly view page
     const pageUrl = `https://www.virginatlantic.com/reward-flight-finder/results/month?origin=${origin}&destination=${destination}&month=${month}&year=${year}`;
+    let lastApiStatus: number | null = null;
+    let apiParseErrors = 0;
 
-    // Create promise to capture API response
-    const apiResponsePromise = new Promise<ApiMonthResponse[] | null>((resolve) => {
-      let resolved = false;
-      const timeout = setTimeout(() => {
-        if (!resolved) {
-          resolved = true;
-          resolve(null);
-        }
-      }, 30000); // 30 second timeout for API response
+    const apiResponsePromise = new Promise<unknown | null>((resolve) => {
+      let settled = false;
+      const finish = (value: unknown | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        page.off("response", responseHandler);
+        resolve(value);
+      };
 
+      const timeout = setTimeout(() => finish(null), 30000);
       const responseHandler = async (response: any) => {
-        if (resolved) return;
         const url = response.url();
-        if (url.includes('/reward-seat-checker-api/') && response.status() === 200) {
-          try {
-            const data = await response.json();
-            if (Array.isArray(data) && data.length > 0) {
-              resolved = true;
-              clearTimeout(timeout);
-              page.off('response', responseHandler);
-              resolve(data as ApiMonthResponse[]);
-            }
-          } catch (e) {
-            // Ignore parsing errors (redirects, etc.)
-          }
+        if (!url.includes("/reward-seat-checker-api/")) return;
+        const status = response.status();
+        if (status !== 200) {
+          lastApiStatus = status;
+          return;
+        }
+        try {
+          const data = await response.json();
+          finish(data);
+        } catch {
+          apiParseErrors += 1;
+          // Continue listening until timeout/next valid response.
         }
       };
 
-      page.on('response', responseHandler);
+      page.on("response", responseHandler);
     });
 
-    // Navigate - use domcontentloaded which is faster than networkidle
     try {
-      await page.goto(pageUrl, {
-        waitUntil: "domcontentloaded",
-        timeout: 45000,
-      });
-    } catch (e) {
-      // Ignore navigation errors if we got the API response
+      await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
+    } catch {
+      // Ignore navigation errors if API response still arrives.
     }
 
-    // Wait for API response
-    const apiResponse = await apiResponsePromise;
-
-    if (!apiResponse || apiResponse.length === 0) {
-      return {};
-    }
-
-    const monthData: MonthData = {};
-    const apiData = apiResponse[0];
-
-    if (!apiData || !apiData.pointsDays) {
-      return {};
-    }
-
-    for (const day of apiData.pointsDays) {
-      if (!day || !day.seats) continue;
-
-      const dateStr = day.date;
-      monthData[dateStr] = {
-        scrapedAt,
-        minPrice: day.minPrice ?? null,
-        currency: day.currency ?? null,
-        minAwardPointsTotal: day.minAwardPointsTotal ?? 0,
+    const apiResponseRaw = await apiResponsePromise;
+    if (!apiResponseRaw) {
+      if (lastApiStatus !== null) {
+        return {
+          monthData: {},
+          status: "failed",
+          failReason: `fallback API HTTP ${lastApiStatus}`,
+        };
+      }
+      return {
+        monthData: {},
+        status: "failed",
+        failReason: apiParseErrors > 0 ? "fallback API parse failure" : "fallback API timeout",
       };
-
-      // Economy class
-      if (day.seats.awardEconomy && day.seats.awardEconomy.cabinPointsValue > 0) {
-        monthData[dateStr].economy = day.seats.awardEconomy.cabinPointsValue;
-        monthData[dateStr].economySeats = day.seats.awardEconomy.cabinClassSeatCount;
-        monthData[dateStr].economySeatsDisplay = day.seats.awardEconomy.cabinClassSeatCountString;
-        monthData[dateStr].economyIsSaver = day.seats.awardEconomy.isSaverAward;
-      }
-
-      // Premium Economy
-      if (day.seats.awardComfortPlusPremiumEconomy && day.seats.awardComfortPlusPremiumEconomy.cabinPointsValue > 0) {
-        monthData[dateStr].premium = day.seats.awardComfortPlusPremiumEconomy.cabinPointsValue;
-        monthData[dateStr].premiumSeats = day.seats.awardComfortPlusPremiumEconomy.cabinClassSeatCount;
-        monthData[dateStr].premiumSeatsDisplay = day.seats.awardComfortPlusPremiumEconomy.cabinClassSeatCountString;
-        monthData[dateStr].premiumIsSaver = day.seats.awardComfortPlusPremiumEconomy.isSaverAward;
-      }
-
-      // Upper Class (Business)
-      if (day.seats.awardBusiness && day.seats.awardBusiness.cabinPointsValue > 0) {
-        monthData[dateStr].upper = day.seats.awardBusiness.cabinPointsValue;
-        monthData[dateStr].upperSeats = day.seats.awardBusiness.cabinClassSeatCount;
-        monthData[dateStr].upperSeatsDisplay = day.seats.awardBusiness.cabinClassSeatCountString;
-        monthData[dateStr].upperIsSaver = day.seats.awardBusiness.isSaverAward;
-      }
     }
-
-    return monthData;
+    return buildMonthDataFromApiPayload(apiResponseRaw, scrapedAt);
   } catch (error) {
-    console.error(`    Error fetching data:`, error);
-    return {};
+    return { monthData: {}, status: "failed", failReason: getErrorMessage(error) };
   }
 }
 
 export async function scrapeMonth(
-  page: Page,
+  request: APIRequestContext,
+  browser: Browser,
   origin: string,
   destination: string,
   month: string,
   year: string,
   refresh: boolean = false
-): Promise<MonthData> {
+): Promise<FetchMonthResult> {
   const cacheFilename = getMonthCacheFilename(origin, destination, year, month);
 
   if (!refresh && cacheExists(cacheFilename)) {
@@ -180,87 +272,57 @@ export async function scrapeMonth(
         writeCache(cacheFilename, upgradedCached);
       }
       if (cacheAgeMs > CACHE_MAX_AGE_MS) {
-        console.log(`  ↻ Refreshing ${origin} → ${destination} ${year}-${month} (cache older than 1 hour)`);
+        logMonthRequestDetail(`  ↻ Refreshing ${origin} → ${destination} ${year}-${month} (cache older than 1 hour)`);
       } else if (hasMissingSeatCounts(upgradedCached)) {
-        console.log(`  ↻ Refreshing ${origin} → ${destination} ${year}-${month} to capture seat counts`);
+        logMonthRequestDetail(`  ↻ Refreshing ${origin} → ${destination} ${year}-${month} to capture seat counts`);
       } else {
-        console.log(`  ✓ Loaded ${origin} → ${destination} ${year}-${month} from cache`);
-        return upgradedCached;
+        logMonthRequestDetail(`  ✓ Loaded ${origin} → ${destination} ${year}-${month} from cache`);
+        return {
+          monthData: upgradedCached,
+          status: Object.keys(upgradedCached).length > 0 ? "success" : "empty",
+          fromCache: true,
+        };
       }
     }
   }
 
-  console.log(`  Fetching ${origin} → ${destination} ${year}-${month}...`);
+  logMonthRequestDetail(`  Fetching ${origin} → ${destination} ${year}-${month}...`);
 
-  const monthData = await fetchMonthDataWithPage(page, origin, destination, month, year);
+  let result = await fetchMonthDataWithRequest(request, origin, destination, month, year);
+  let usedFallback = false;
+  if (result.status === "failed") {
+    // First call can fail before session/cookies settle; retry direct once before browser fallback.
+    await new Promise((resolve) => setTimeout(resolve, DIRECT_API_RETRY_DELAY_MS));
+    result = await fetchMonthDataWithRequest(request, origin, destination, month, year);
+  }
 
-  console.log(`    Found ${Object.keys(monthData).length} dates with availability`);
+  if (result.status === "failed") {
+    const directReason = result.failReason ? ` (${result.failReason})` : "";
+    logMonthRequestDetail(
+      `  ↻ Direct API request failed for ${origin} → ${destination} ${year}-${month}${directReason}; falling back to browser path`
+    );
+    const fallbackPage = await browser.newPage();
+    usedFallback = true;
+    try {
+      result = await fetchMonthDataWithPageFallback(fallbackPage, origin, destination, month, year);
+    } finally {
+      await fallbackPage.close();
+    }
+  }
+
+  if (result.status === "failed") {
+    const reason = result.failReason ? ` (${result.failReason})` : "";
+    logMonthRequestDetail(`    ✖ Failed to load data${reason}`);
+    return { monthData: {}, status: "failed", failReason: result.failReason, usedFallback, fromCache: false };
+  }
+
+  const monthData = result.monthData;
+  if (result.status === "empty") {
+    logMonthRequestDetail(`    ○ Loaded data but found 0 dates with availability`);
+  } else {
+    logMonthRequestDetail(`    Found ${Object.keys(monthData).length} dates with availability`);
+  }
   writeCache(cacheFilename, monthData);
 
-  return monthData;
-}
-
-export async function scrapeAllMonths(
-  page: Page,
-  origin: string,
-  destination: string,
-  months: YearMonth[],
-  refresh: boolean = false
-): Promise<{ outbound: MonthData[]; inbound: MonthData[] }> {
-  console.log(`\nFetching ${origin} ↔ ${destination}...`);
-
-  const browser = page.context().browser();
-  if (!browser) {
-    throw new Error("Browser not available");
-  }
-
-  // Create array of all requests (both outbound and inbound interleaved)
-  const requests: Array<{
-    type: 'outbound' | 'inbound';
-    index: number;
-    month: string;
-    year: string;
-  }> = [];
-
-  months.forEach((m, index) => {
-    requests.push({ type: 'outbound', index, month: m.month, year: m.year });
-    requests.push({ type: 'inbound', index, month: m.month, year: m.year });
-  });
-
-  // Higher parallelism with tunable caps.
-  const BATCH_SIZE = getPositiveIntEnv("VA_MONTH_REQUEST_CONCURRENCY", 6);
-  const BATCH_DELAY_MS = getPositiveIntEnv("VA_MONTH_BATCH_DELAY_MS", 150);
-  const outboundResults: MonthData[] = new Array(months.length);
-  const inboundResults: MonthData[] = new Array(months.length);
-
-  for (let i = 0; i < requests.length; i += BATCH_SIZE) {
-    const batch = requests.slice(i, i + BATCH_SIZE);
-
-    // Process batch in parallel with separate pages
-    const batchPromises = batch.map(async (req) => {
-      const batchPage = await browser.newPage();
-      try {
-        const requestOrigin = req.type === 'outbound' ? origin : destination;
-        const requestDest = req.type === 'outbound' ? destination : origin;
-        const data = await scrapeMonth(batchPage, requestOrigin, requestDest, req.month, req.year, refresh);
-
-        if (req.type === 'outbound') {
-          outboundResults[req.index] = data;
-        } else {
-          inboundResults[req.index] = data;
-        }
-      } finally {
-        await batchPage.close();
-      }
-    });
-
-    await Promise.all(batchPromises);
-
-    // Small delay between batches to reduce burst pressure.
-    if (i + BATCH_SIZE < requests.length) {
-      await new Promise(resolve => setTimeout(resolve, BATCH_DELAY_MS));
-    }
-  }
-
-  return { outbound: outboundResults, inbound: inboundResults };
+  return { monthData, status: result.status, usedFallback, fromCache: false };
 }

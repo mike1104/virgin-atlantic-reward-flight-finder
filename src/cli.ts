@@ -1,11 +1,16 @@
 #!/usr/bin/env node
 
+import * as fs from "fs";
+import * as readline from "readline";
 import { chromium } from "playwright";
-import { scrapeAllMonths } from "./scrape/month";
+import { scrapeMonth } from "./scrape/month";
 import { scrapeDestinations } from "./scrape/destinations";
 import { buildReportShell, writeDestinationMetadata, writeReportData } from "./report/output";
-import { ensureDirs, readCache, writeCache } from "./utils/cache";
+import { cacheExists, ensureDirs, getCachePath, readCache, writeCache } from "./utils/cache";
 import { getNext12Months } from "./utils/dates";
+import { getNonNegativeIntEnv, getPositiveIntEnv } from "./utils/env";
+import { getMonthCacheFilename, hasMissingSeatCounts } from "./utils/month-data";
+import { normalizeYearMonths } from "./utils/year-month";
 import { Destination, MonthData, YearMonth } from "./types";
 
 type ScrapeManifest = {
@@ -28,35 +33,115 @@ const OUTPUT_FLIGHTS_DATA_FILE = "flights-data.json";
 const OUTPUT_DESTINATIONS_FILE = "destinations.json";
 const OUTPUT_REPORT_FILE = "index.html";
 
-function getPositiveIntEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (!raw) return fallback;
-  const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed < 1) return fallback;
-  return parsed;
-}
+type ScrapeProgressSnapshot = {
+  completed: number;
+  successful: number;
+  empty: number;
+  failed: number;
+  fallbackUsed: number;
+  cached: number;
+};
 
-function normalizeYearMonths(months: YearMonth[]): YearMonth[] {
-  const uniq = new Set<string>();
-  const normalized: YearMonth[] = [];
+class ScrapeProgressBar {
+  private readonly enabled: boolean;
+  private lastLine = "";
+  private rendered = false;
+  private readonly startedAtMs: number;
 
-  for (const m of months) {
-    const monthNum = Number(m.month);
-    const yearNum = Number(m.year);
-    if (!Number.isInteger(monthNum) || monthNum < 1 || monthNum > 12) continue;
-    if (!Number.isInteger(yearNum) || yearNum < 2000) continue;
-
-    const month = String(monthNum).padStart(2, "0");
-    const year = String(yearNum);
-    const key = `${year}-${month}`;
-    if (uniq.has(key)) continue;
-
-    uniq.add(key);
-    normalized.push({ month, year });
+  constructor(private readonly total: number) {
+    this.enabled = process.stdout.isTTY === true && process.env.VA_PROGRESS_BAR !== "0";
+    this.startedAtMs = Date.now();
   }
 
-  normalized.sort((a, b) => `${a.year}-${a.month}`.localeCompare(`${b.year}-${b.month}`));
-  return normalized;
+  private msPerSuccess(successful: number, cached: number): string {
+    const nonCachedSuccesses = Math.max(successful - cached, 0);
+    if (nonCachedSuccesses <= 0) return "--";
+    const elapsedMs = Math.max(Date.now() - this.startedAtMs, 1);
+    return (elapsedMs / nonCachedSuccesses).toFixed(0);
+  }
+
+  private truncateToTerminal(line: string): string {
+    if (!this.enabled) return line;
+    const columns = process.stdout.columns || 120;
+    if (line.length < columns) return line;
+    return line.slice(0, Math.max(columns - 1, 1));
+  }
+
+  private writeLine(line: string): void {
+    const truncated = this.truncateToTerminal(line);
+    readline.clearLine(process.stdout, 0);
+    readline.cursorTo(process.stdout, 0);
+    process.stdout.write(truncated);
+  }
+
+  private buildLine(snapshot: ScrapeProgressSnapshot): string {
+    const percent = this.total === 0 ? 100 : Math.round((snapshot.completed / this.total) * 100);
+    const barWidth = 30;
+    const filled = Math.max(0, Math.min(barWidth, Math.round((percent / 100) * barWidth)));
+    const bar = `${"#".repeat(filled)}${"-".repeat(barWidth - filled)}`;
+    const msPerSuccess = this.msPerSuccess(snapshot.successful, snapshot.cached);
+    const avgText = msPerSuccess === "--" ? "--" : `${msPerSuccess}ms`;
+    return `  [${bar}] ${snapshot.completed}/${this.total} ${percent}% | ok:${snapshot.successful} empty:${snapshot.empty} fail:${snapshot.failed} fb:${snapshot.fallbackUsed} cache:${snapshot.cached} ok_avg:${avgText}`;
+  }
+
+  update(snapshot: ScrapeProgressSnapshot): void {
+    if (!this.enabled) {
+      const percent = this.total === 0 ? 100 : Math.round((snapshot.completed / this.total) * 100);
+      const msPerSuccess = this.msPerSuccess(snapshot.successful, snapshot.cached);
+      const avgText = msPerSuccess === "--" ? "--" : `${msPerSuccess}ms`;
+      console.log(
+        `  Progress ${snapshot.completed}/${this.total} (${percent}%) | ok:${snapshot.successful} empty:${snapshot.empty} failed:${snapshot.failed} fallback:${snapshot.fallbackUsed} cache:${snapshot.cached} ok_avg:${avgText}`
+      );
+      return;
+    }
+
+    this.lastLine = this.buildLine(snapshot);
+    this.writeLine(this.lastLine);
+    this.rendered = true;
+  }
+
+  log(message: string): void {
+    if (!this.enabled) {
+      console.log(message);
+      return;
+    }
+    if (!this.rendered) {
+      console.log(message);
+      return;
+    }
+    this.writeLine("");
+    process.stdout.write(`${message}\n`);
+    this.writeLine(this.lastLine);
+  }
+
+  finish(): void {
+    if (!this.enabled || !this.rendered) return;
+    this.writeLine(this.lastLine);
+    process.stdout.write("\n");
+    this.rendered = false;
+  }
+}
+
+function willUseMonthCache(
+  refresh: boolean,
+  origin: string,
+  destination: string,
+  year: string,
+  month: string
+): boolean {
+  if (refresh) return false;
+  const cacheFilename = getMonthCacheFilename(origin, destination, year, month);
+  if (!cacheExists(cacheFilename)) return false;
+
+  const cached = readCache<MonthData>(cacheFilename);
+  if (!cached) return false;
+  if (hasMissingSeatCounts(cached)) return false;
+
+  const cachePath = getCachePath(cacheFilename);
+  const cacheStat = fs.statSync(cachePath);
+  const cacheAgeMs = Date.now() - cacheStat.mtime.getTime();
+  const cacheMaxAgeMs = 60 * 60 * 1000;
+  return cacheAgeMs <= cacheMaxAgeMs;
 }
 
 function formatDuration(ms: number): string {
@@ -224,7 +309,7 @@ async function scrapeToCache(
   const page = await browser.newPage();
 
   try {
-    const allRoutes = await scrapeDestinations(page);
+    const allRoutes = await scrapeDestinations(page, forceFresh);
     const targetRoutes = filterRoutes(allRoutes, requestedRoutes);
 
     if (targetRoutes.length === 0) {
@@ -253,37 +338,319 @@ async function scrapeToCache(
       `\n🗓️  Fetching availability for route-specific month ranges (${allMonths.length} total unique months)...\n`
     );
 
+    type RouteScrapeState = {
+      route: Destination;
+      outbound: MonthData[];
+      inbound: MonthData[];
+      pendingRequests: number;
+      completed: boolean;
+    };
+
+    type MonthQueueItem = {
+      requestOrigin: string;
+      requestDestination: string;
+      month: string;
+      year: string;
+      likelyCacheHit: boolean;
+      dependents: Array<{
+        routeCode: string;
+        type: "outbound" | "inbound";
+        monthIndex: number;
+      }>;
+    };
+
     const destinationData = new Map<string, { outbound: MonthData[]; inbound: MonthData[] }>();
-    const DEST_BATCH_SIZE = getPositiveIntEnv("VA_DESTINATION_CONCURRENCY", 1);
+    const routeStates = new Map<string, RouteScrapeState>();
+    const requestQueueByKey = new Map<string, MonthQueueItem>();
 
-    for (let i = 0; i < targetRoutes.length; i += DEST_BATCH_SIZE) {
-      const batch = targetRoutes.slice(i, i + DEST_BATCH_SIZE);
+    for (const route of targetRoutes) {
+      const endpoints = getRouteEndpoints(route);
+      if (!endpoints.originCode || !endpoints.destinationCode) {
+        console.log(`  ⚠️  ${route.code}: Invalid route definition`);
+        continue;
+      }
 
-      await Promise.all(batch.map(async (route) => {
-        const monthsToScrape = destinationMonths[route.code] || defaultMonths;
-        const endpoints = getRouteEndpoints(route);
-        if (!endpoints.originCode || !endpoints.destinationCode) {
-          console.log(`  ⚠️  ${route.code}: Invalid route definition`);
+      const monthsToScrape = destinationMonths[route.code] || defaultMonths;
+      const routeState: RouteScrapeState = {
+        route,
+        outbound: new Array(monthsToScrape.length),
+        inbound: new Array(monthsToScrape.length),
+        pendingRequests: monthsToScrape.length * 2,
+        completed: false,
+      };
+      routeStates.set(route.code, routeState);
+
+      const addRequest = (
+        type: "outbound" | "inbound",
+        monthIndex: number,
+        month: string,
+        year: string,
+        requestOrigin: string,
+        requestDestination: string
+      ): void => {
+        const requestKey = `${requestOrigin}-${requestDestination}-${year}-${month}`;
+        const likelyCacheHit = willUseMonthCache(
+          forceFresh,
+          requestOrigin,
+          requestDestination,
+          year,
+          month
+        );
+        const existing = requestQueueByKey.get(requestKey);
+        if (existing) {
+          existing.dependents.push({ routeCode: route.code, type, monthIndex });
+          existing.likelyCacheHit = existing.likelyCacheHit && likelyCacheHit;
           return;
         }
 
-        const { outbound, inbound } = await scrapeAllMonths(
-          page,
-          endpoints.originCode,
-          endpoints.destinationCode,
-          monthsToScrape,
-          forceFresh
-        );
+        requestQueueByKey.set(requestKey, {
+          requestOrigin,
+          requestDestination,
+          month,
+          year,
+          likelyCacheHit,
+          dependents: [{ routeCode: route.code, type, monthIndex }],
+        });
+      };
 
-        const hasData = outbound.some((m) => Object.keys(m).length > 0) ||
-                        inbound.some((m) => Object.keys(m).length > 0);
-        if (hasData) {
-          destinationData.set(route.code, { outbound, inbound });
-          console.log(`  ✅ ${route.code}: data collected`);
-        } else {
-          console.log(`  ⚠️  ${route.code}: No availability data found`);
+      monthsToScrape.forEach((m, monthIndex) => {
+        addRequest(
+          "outbound",
+          monthIndex,
+          m.month,
+          m.year,
+          endpoints.originCode!,
+          endpoints.destinationCode!
+        );
+        addRequest(
+          "inbound",
+          monthIndex,
+          m.month,
+          m.year,
+          endpoints.destinationCode!,
+          endpoints.originCode!
+        );
+      });
+    }
+
+    const requestQueue: MonthQueueItem[] = Array.from(requestQueueByKey.values());
+    const scrapeProgressBar = new ScrapeProgressBar(requestQueue.length);
+    const requestMaxInFlight = getPositiveIntEnv("VA_REQUEST_MAX_IN_FLIGHT", 8);
+    const dispatchIntervalMs = getPositiveIntEnv("VA_REQUEST_DISPATCH_INTERVAL_MS", 100);
+    const dispatchIntervalJitterMs = getNonNegativeIntEnv("VA_REQUEST_DISPATCH_INTERVAL_JITTER_MS", 10);
+    const requestFailureRetryLimit = getNonNegativeIntEnv("VA_REQUEST_FAILURE_RETRY_LIMIT", 1);
+    const abortConsecutiveFailures = getPositiveIntEnv("VA_REQUEST_ABORT_CONSECUTIVE_FAILURES", 16);
+    scrapeProgressBar.log(
+      `  ⚙️  Request tuning: max in-flight ${requestMaxInFlight}, interval ${dispatchIntervalMs}ms (+0-${dispatchIntervalJitterMs}ms jitter), failure retries ${requestFailureRetryLimit}`
+    );
+
+    if (requestQueue.length === 0) {
+      console.log("\n❌ No valid routes with month requests to scrape\n");
+      process.exit(1);
+    }
+
+    const request = page.context().request;
+    let completedRequests = 0;
+    let successfulRequests = 0;
+    let emptyRequests = 0;
+    let failedRequests = 0;
+    let fallbackRequests = 0;
+    let cachedRequests = 0;
+    let consecutiveFailedRequests = 0;
+    let nextQueueIndex = 0;
+    let nextDispatchAt = 0;
+    const activeTasks = new Set<Promise<void>>();
+    let abortError: Error | null = null;
+    let rewarmLock: Promise<void> = Promise.resolve();
+
+    const sleep = async (ms: number): Promise<void> => {
+      await new Promise((resolve) => setTimeout(resolve, ms));
+    };
+
+    const rewarmScrapeSession = async (): Promise<boolean> => {
+      try {
+        scrapeProgressBar.log("  ↻ Rewarming reward session...");
+        await page.goto("https://www.virginatlantic.com/reward-flight-finder", {
+          waitUntil: "domcontentloaded",
+          timeout: 25000,
+        });
+
+        try {
+          const cookieButton = page.locator("#onetrust-accept-btn-handler");
+          if (await cookieButton.isVisible({ timeout: 3000 })) {
+            await cookieButton.click();
+          }
+        } catch {
+          // Cookie banner is optional.
         }
-      }));
+
+        await page.waitForTimeout(250);
+        return true;
+      } catch {
+        scrapeProgressBar.log("  ⚠️  Session rewarm failed");
+        return false;
+      }
+    };
+
+    const withRewarmLock = async (): Promise<boolean> => {
+      let rewarmed = false;
+      const run = async () => {
+        rewarmed = await rewarmScrapeSession();
+      };
+      rewarmLock = rewarmLock.then(run, run);
+      await rewarmLock;
+      return rewarmed;
+    };
+
+    const waitForDispatchWindow = async (): Promise<void> => {
+      const now = Date.now();
+      if (nextDispatchAt > now) {
+        await sleep(nextDispatchAt - now);
+      }
+      const jitterMs = dispatchIntervalJitterMs > 0
+        ? Math.floor(Math.random() * (dispatchIntervalJitterMs + 1))
+        : 0;
+      nextDispatchAt = Date.now() + dispatchIntervalMs + jitterMs;
+    };
+
+    const runQueueItem = async (item: MonthQueueItem) => {
+      let result = await scrapeMonth(
+        request,
+        browser,
+        item.requestOrigin,
+        item.requestDestination,
+        item.month,
+        item.year,
+        forceFresh
+      );
+
+      if (result.status === "failed") {
+        for (let retry = 0; retry < requestFailureRetryLimit; retry++) {
+          const rewarmed = await withRewarmLock();
+          if (!rewarmed) break;
+          scrapeProgressBar.log(
+            `  ↻ Retrying ${item.requestOrigin} → ${item.requestDestination} ${item.year}-${item.month} after session rewarm...`
+          );
+          result = await scrapeMonth(
+            request,
+            browser,
+            item.requestOrigin,
+            item.requestDestination,
+            item.month,
+            item.year,
+            forceFresh
+          );
+          if (result.status !== "failed") break;
+        }
+      }
+
+      return result;
+    };
+
+    const launchQueueItem = (item: MonthQueueItem): void => {
+      const task = (async () => {
+        let result: Awaited<ReturnType<typeof scrapeMonth>>;
+        try {
+          result = await runQueueItem(item);
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          scrapeProgressBar.log(
+            `  ✖ Unhandled error for ${item.requestOrigin} → ${item.requestDestination} ${item.year}-${item.month} (${reason})`
+          );
+          result = { monthData: {}, status: "failed", failReason: reason };
+        }
+
+        completedRequests += 1;
+        if (result.usedFallback) fallbackRequests += 1;
+        if (result.fromCache) cachedRequests += 1;
+
+        if (result.status === "failed") {
+          failedRequests += 1;
+          consecutiveFailedRequests += 1;
+          if (consecutiveFailedRequests >= abortConsecutiveFailures && !abortError) {
+            abortError = new Error(
+              `Aborting scrape: ${consecutiveFailedRequests} consecutive failed requests`
+            );
+          }
+        } else {
+          successfulRequests += 1;
+          consecutiveFailedRequests = 0;
+          if (result.status === "empty") {
+            emptyRequests += 1;
+          }
+        }
+
+        scrapeProgressBar.update({
+          completed: completedRequests,
+          successful: successfulRequests,
+          empty: emptyRequests,
+          failed: failedRequests,
+          fallbackUsed: fallbackRequests,
+          cached: cachedRequests,
+        });
+
+        for (const dependent of item.dependents) {
+          const routeState = routeStates.get(dependent.routeCode);
+          if (!routeState) continue;
+
+          if (dependent.type === "outbound") {
+            routeState.outbound[dependent.monthIndex] = result.monthData;
+          } else {
+            routeState.inbound[dependent.monthIndex] = result.monthData;
+          }
+
+          routeState.pendingRequests -= 1;
+          if (!routeState.completed && routeState.pendingRequests === 0) {
+            routeState.completed = true;
+            const hasData = routeState.outbound.some((m) => Object.keys(m || {}).length > 0) ||
+              routeState.inbound.some((m) => Object.keys(m || {}).length > 0);
+            if (hasData) {
+              destinationData.set(routeState.route.code, {
+                outbound: routeState.outbound,
+                inbound: routeState.inbound,
+              });
+              scrapeProgressBar.log(`  ✅ ${routeState.route.code}: data collected`);
+            } else {
+              scrapeProgressBar.log(`  ⚠️  ${routeState.route.code}: No availability data found`);
+            }
+          }
+        }
+      })().finally(() => {
+        activeTasks.delete(task);
+      });
+
+      activeTasks.add(task);
+    };
+
+    try {
+      while ((nextQueueIndex < requestQueue.length || activeTasks.size > 0) && !abortError) {
+        while (
+          nextQueueIndex < requestQueue.length &&
+          activeTasks.size < requestMaxInFlight &&
+          !abortError
+        ) {
+          const item = requestQueue[nextQueueIndex];
+          if (!item.likelyCacheHit) {
+            await waitForDispatchWindow();
+          }
+          nextQueueIndex += 1;
+          launchQueueItem(item);
+        }
+
+        if (activeTasks.size > 0) {
+          await Promise.race(activeTasks);
+        }
+      }
+
+      if (activeTasks.size > 0) {
+        await Promise.all(activeTasks);
+      }
+
+      if (abortError) {
+        throw abortError;
+      }
+    } finally {
+      scrapeProgressBar.finish();
     }
 
     if (destinationData.size === 0) {
@@ -399,6 +766,10 @@ async function main(): Promise<void> {
   console.log("🛫 Virgin Atlantic Reward Return Optimizer\n");
 
   const args = process.argv.slice(2);
+  if (args.includes("--help") || args.includes("-h")) {
+    printUsage();
+    return;
+  }
   const first = args[0] && !args[0].startsWith("-") ? args[0] : null;
   const knownCommands = new Set(["scrape", "process", "build", "all", "help"]);
   const command = first && knownCommands.has(first) ? first : null;

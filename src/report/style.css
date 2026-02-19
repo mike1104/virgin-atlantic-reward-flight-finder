@@ -148,6 +148,11 @@ header p {
   border-color: var(--color-primary);
 }
 
+.dest-toggle.is-placeholder,
+.from-toggle.is-placeholder {
+  color: var(--color-text-subtle);
+}
+
 .dest-dropdown,
 .from-dropdown {
   display: none;
@@ -174,23 +179,20 @@ header p {
 }
 
 .dest-actions {
-  display: flex;
-  gap: 8px;
-  padding: 8px 12px;
+  display: block;
   border-bottom: 1px solid var(--color-border-soft);
 }
 
-.dest-actions button {
-  padding: 4px 10px;
-  border: 1px solid var(--color-border);
-  border-radius: 3px;
-  background: var(--color-surface-soft);
-  cursor: pointer;
-  font-size: 12px;
+.dest-select-toggle {
+  margin: 0;
 }
 
-.dest-actions button:hover {
-  background: var(--color-surface-hover-soft);
+.dest-select-toggle input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+}
+
+.dest-select-toggle input[type="checkbox"]:disabled + span {
+  opacity: 0.6;
 }
 
 .dest-group-label {
@@ -269,6 +271,43 @@ header p {
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
+}
+
+.filter-section-swap {
+  align-self: flex-end;
+}
+
+.swap-route-btn {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.swap-route-icon {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+.swap-route-btn:hover:not(:disabled),
+.swap-route-btn:focus-visible:not(:disabled) {
+  outline: none;
+  border-color: var(--color-primary);
+}
+
+.swap-route-btn:disabled {
+  color: var(--color-text-subtle);
+  border-color: var(--color-border-soft);
+  background: var(--color-surface-subtle);
+  cursor: not-allowed;
 }
 
 .filter-group {

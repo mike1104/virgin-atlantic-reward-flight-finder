@@ -13,13 +13,3 @@ export function getNext12Months(): YearMonth[] {
 
   return result;
 }
-
-export function addDays(dateStr: string, days: number): string {
-  const date = new Date(dateStr);
-  date.setDate(date.getDate() + days);
-  return date.toISOString().split("T")[0];
-}
-
-export function parseDate(dateStr: string): Date {
-  return new Date(dateStr);
-}

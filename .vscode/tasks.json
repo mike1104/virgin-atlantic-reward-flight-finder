@@ -1,0 +1,45 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Scrape (Prompted Settings)",
+      "type": "shell",
+      "command": "npm run -s scrape -- ${input:scrape_cache_flag}",
+      "options": {
+        "env": {
+          "VA_REQUEST_MAX_IN_FLIGHT": "${input:va_request_max_in_flight}",
+          "VA_REQUEST_DISPATCH_INTERVAL_MS": "${input:va_request_dispatch_interval_ms}"
+        }
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
+    }
+  ],
+  "inputs": [
+    {
+      "id": "scrape_cache_flag",
+      "type": "pickString",
+      "description": "Cache mode",
+      "options": [
+        "",
+        "--no-cache"
+      ],
+      "default": ""
+    },
+
+    {
+      "id": "va_request_max_in_flight",
+      "type": "promptString",
+      "description": "Max concurrent requests - empty for default",
+    },
+    {
+      "id": "va_request_dispatch_interval_ms",
+      "type": "promptString",
+      "description": "Request dispatch interval in ms - empty for default",
+    }
+  ]
+}

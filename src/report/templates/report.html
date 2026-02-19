@@ -23,20 +23,29 @@
           <div class="filter-section">
             <span class="filter-label">From:</span>
             <div class="from-multiselect">
-              <button type="button" class="from-toggle">Select departure</button>
+              <button type="button" class="from-toggle is-placeholder">Select</button>
               <div class="from-dropdown">
                 <div class="from-list"></div>
               </div>
             </div>
           </div>
+          <div class="filter-section filter-section-swap">
+            <button type="button" class="swap-route-btn" title="Swap from and to" aria-label="Swap from and to" disabled>
+              <svg class="swap-route-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M7 7h11l-2.8-2.8L16.6 3 22 8.4l-5.4 5.4-1.4-1.4L18 9H7V7zm10 10H6l2.8 2.8-1.4 1.4L2 15.8l5.4-5.4 1.4 1.4L6 15h11v2z"/>
+              </svg>
+            </button>
+          </div>
           <div class="filter-section">
             <span class="filter-label">To:</span>
             <div class="dest-multiselect">
-              <button type="button" class="dest-toggle">All selected</button>
+              <button type="button" class="dest-toggle is-placeholder">Select departure first</button>
               <div class="dest-dropdown">
                 <div class="dest-actions">
-                  <button type="button" class="dest-select-all">Select All</button>
-                  <button type="button" class="dest-select-none">Select None</button>
+                  <label class="dest-option dest-select-toggle">
+                    <input type="checkbox" class="dest-select-all-cb">
+                    <span>All</span>
+                  </label>
                 </div>
                 <div class="dest-list"></div>
               </div>

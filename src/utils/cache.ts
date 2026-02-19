@@ -17,7 +17,7 @@ export function getCachePath(filename: string): string {
   return path.join(CACHE_DIR, filename);
 }
 
-export function getOutputPath(filename: string): string {
+function getOutputPath(filename: string): string {
   return path.join(OUTPUT_DIR, filename);
 }
 

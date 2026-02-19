@@ -73,6 +73,20 @@ function buildRouteCatalog() {
   ROUTES = [];
   ROUTES_BY_OD = {};
   var originsByCode = {};
+  function registerRoute(routeDef) {
+    if (!routeDef || !routeDef.originCode || !routeDef.destinationCode) return;
+    var odKey = routeDef.originCode + '|' + routeDef.destinationCode;
+    if (ROUTES_BY_OD[odKey]) return;
+    ROUTES.push(routeDef);
+    ROUTES_BY_OD[odKey] = routeDef;
+    if (!originsByCode[routeDef.originCode]) {
+      originsByCode[routeDef.originCode] = {
+        name: routeDef.originName || routeDef.originCode,
+        group: routeDef.originGroup || 'Other'
+      };
+    }
+  }
+
   var routeCodes = Object.keys(RAW_DATA || {});
   for (var ri = 0; ri < routeCodes.length; ri++) {
     var routeCode = routeCodes[ri];
@@ -84,21 +98,36 @@ function buildRouteCatalog() {
 
     var destinationName = routeMeta.destinationName || destinationCode;
     var originName = routeMeta.originName || originCode;
-    ROUTES.push({
+    registerRoute({
       routeCode: routeCode,
+      cacheKey: routeCode,
+      reverse: false,
       originCode: originCode,
       destinationCode: destinationCode,
       originName: originName,
       destinationName: destinationName,
+      originGroup: routeMeta.originGroup || 'Other',
       group: routeMeta.group || 'Other',
       routeLabel: routeMeta.name || (originName + ' -> ' + destinationName)
     });
-    ROUTES_BY_OD[originCode + '|' + destinationCode] = routeCode;
-    if (!originsByCode[originCode]) {
-      originsByCode[originCode] = {
-        name: originName,
-        group: routeMeta.originGroup || 'Other'
-      };
+
+    var reverseCode = destinationCode + '-' + originCode;
+    if (!RAW_DATA[reverseCode]) {
+      var reverseMeta = ROUTE_META_BY_CODE[reverseCode] || {};
+      var reverseOriginName = reverseMeta.originName || destinationName;
+      var reverseDestinationName = reverseMeta.destinationName || originName;
+      registerRoute({
+        routeCode: routeCode,
+        cacheKey: routeCode + '|rev',
+        reverse: true,
+        originCode: reverseMeta.originCode || destinationCode,
+        destinationCode: reverseMeta.destinationCode || originCode,
+        originName: reverseOriginName,
+        destinationName: reverseDestinationName,
+        originGroup: reverseMeta.originGroup || routeMeta.group || 'Other',
+        group: reverseMeta.group || routeMeta.originGroup || 'Other',
+        routeLabel: reverseMeta.name || (reverseOriginName + ' -> ' + reverseDestinationName)
+      });
     }
   }
 
@@ -156,11 +185,15 @@ function updateFromToggleLabel() {
   if (!btn) return;
   var selected = document.querySelector('.from-radio:checked');
   if (!selected) {
-    btn.textContent = 'Select departure';
+    btn.textContent = 'Select';
+    btn.classList.add('is-placeholder');
+    updateSwapButtonState();
     return;
   }
   var label = selected.parentElement ? selected.parentElement.textContent : '';
   btn.textContent = (label || '').trim() || selected.value;
+  btn.classList.remove('is-placeholder');
+  updateSwapButtonState();
 }
 
 function setDepartureSelection(code) {
@@ -467,12 +500,15 @@ function cabinPassesFilter(outCabin, inCabin, filters) {
 }
 
 // ===== Compute combos for a destination using current filters =====
-function computeCombos(destCode, filters) {
-  var data = RAW_DATA[destCode];
+function computeCombos(routeRef, filters) {
+  var routeCode = typeof routeRef === 'string' ? routeRef : routeRef.routeCode;
+  var reverse = !!(routeRef && typeof routeRef === 'object' && routeRef.reverse);
+  var data = RAW_DATA[routeCode];
   if (!data) return [];
 
-  var outbound = data.outbound;
-  var inbound = data.inbound;
+  var outbound = reverse ? data.inbound : data.outbound;
+  var inbound = reverse ? data.outbound : data.inbound;
+  if (!outbound || !inbound) return [];
   var combos = [];
   var cabins = ['economy', 'premium', 'upper'];
 
@@ -607,6 +643,41 @@ function getSelectedDestinations() {
   return selected;
 }
 
+function updateSwapButtonState() {
+  var swapBtn = document.querySelector('.swap-route-btn');
+  if (!swapBtn) return;
+
+  var currentOrigin = getDepartureSelection();
+  var selectedDestinations = getSelectedDestinations();
+  if (!currentOrigin || selectedDestinations.length !== 1) {
+    swapBtn.disabled = true;
+    return;
+  }
+
+  var newOrigin = selectedDestinations[0];
+  var targetOriginRadio = document.querySelector('.from-radio[value="' + newOrigin.replace(/"/g, '\\"') + '"]');
+  swapBtn.disabled = !targetOriginRadio;
+}
+
+function swapFromToSelection() {
+  var currentOrigin = getDepartureSelection();
+  var selectedDestinations = getSelectedDestinations();
+  if (!currentOrigin || selectedDestinations.length !== 1) return;
+
+  var newOrigin = selectedDestinations[0];
+  setDepartureSelection(newOrigin);
+  populateDestinations(currentOrigin);
+  bindDestinationCheckboxEvents();
+  updateFromToggleLabel();
+  updateDestToggleLabel();
+  invalidateAndRender();
+
+  var fromDropdown = document.querySelector('.from-dropdown');
+  var destDropdown = document.querySelector('.dest-dropdown');
+  if (fromDropdown) fromDropdown.classList.remove('open');
+  if (destDropdown) destDropdown.classList.remove('open');
+}
+
 function updateDestToggleLabel() {
   var cbs = document.querySelectorAll('.dest-cb');
   var total = cbs.length;
@@ -614,14 +685,48 @@ function updateDestToggleLabel() {
   cbs.forEach(function(cb) { if (cb.checked) checked++; });
   var btn = document.querySelector('.dest-toggle');
   if (!btn) return;
-  if (total === 0) btn.textContent = 'Select departure first';
-  else if (checked === 0) btn.textContent = 'No destinations selected';
-  else if (checked === total) btn.textContent = 'All destinations selected';
+
+  var selectAllCb = document.querySelector('.dest-select-all-cb');
+  if (selectAllCb) {
+    if (total === 0) {
+      selectAllCb.checked = false;
+      selectAllCb.indeterminate = false;
+      selectAllCb.disabled = true;
+    } else if (checked === 0) {
+      selectAllCb.checked = false;
+      selectAllCb.indeterminate = false;
+      selectAllCb.disabled = false;
+    } else if (checked === total) {
+      selectAllCb.checked = true;
+      selectAllCb.indeterminate = false;
+      selectAllCb.disabled = false;
+    } else {
+      selectAllCb.checked = false;
+      selectAllCb.indeterminate = true;
+      selectAllCb.disabled = false;
+    }
+  }
+
+  if (total === 0) {
+    btn.textContent = 'Select departure first';
+    btn.classList.add('is-placeholder');
+  }
+  else if (checked === 0) {
+    btn.textContent = 'Select';
+    btn.classList.add('is-placeholder');
+  }
   else if (checked === 1) {
     var sel = document.querySelector('.dest-cb:checked');
-    btn.textContent = sel ? sel.parentElement.textContent.trim() : '1 destination';
+    var selLabel = sel && sel.nextElementSibling ? sel.nextElementSibling.textContent : '';
+    btn.textContent = (selLabel || '').trim() || (sel && sel.value ? sel.value : ('1 of ' + total + ' destinations'));
+    btn.classList.remove('is-placeholder');
   }
-  else btn.textContent = checked + ' of ' + total + ' destinations';
+  else {
+    btn.textContent = checked + ' of ' + total + ' destinations';
+    btn.classList.remove('is-placeholder');
+  }
+
+  updateSwapButtonState();
 }
 
 // ===== Render current page of combos =====
@@ -645,21 +750,20 @@ function render() {
   var combos = [];
   for (var di = 0; di < selectedDestinations.length; di++) {
     var destinationCode = selectedDestinations[di];
-    var routeCode = ROUTES_BY_OD[departureCode + '|' + destinationCode];
-    if (!routeCode) continue;
+    var routeRef = ROUTES_BY_OD[departureCode + '|' + destinationCode];
+    if (!routeRef) continue;
+    var comboCacheKey = routeRef.cacheKey || (routeRef.routeCode + (routeRef.reverse ? '|rev' : ''));
 
-    if (!comboCache[routeCode]) {
-      comboCache[routeCode] = computeCombos(routeCode, filters);
+    if (!comboCache[comboCacheKey]) {
+      comboCache[comboCacheKey] = computeCombos(routeRef, filters);
     }
-    var destCombos = comboCache[routeCode];
+    var destCombos = comboCache[comboCacheKey];
     for (var ci = 0; ci < destCombos.length; ci++) {
       var combo = destCombos[ci];
-      combo.dest = routeCode;
-      var routeMeta = ROUTE_META_BY_CODE[routeCode];
-      var routeParts = getRouteParts(routeCode);
-      combo.destLabel = routeMeta && routeMeta.name ? routeMeta.name : routeCode;
-      combo.originCode = routeMeta && routeMeta.originCode ? routeMeta.originCode : routeParts.origin;
-      combo.destinationCode = routeMeta && routeMeta.destinationCode ? routeMeta.destinationCode : routeParts.destination;
+      combo.dest = routeRef.routeCode;
+      combo.destLabel = routeRef.routeLabel || (routeRef.originName + ' -> ' + routeRef.destinationName);
+      combo.originCode = routeRef.originCode;
+      combo.destinationCode = routeRef.destinationCode;
       combos.push(combo);
     }
   }
@@ -980,7 +1084,8 @@ function populateDestinations(preferredDestinationsCsv) {
   var destList = document.querySelector('.dest-list');
   if (!destList) return;
   var departureCode = getDepartureSelection();
-  var preferredSet = preferredDestinationsCsv
+  var hasPreferredDestinations = preferredDestinationsCsv !== undefined && preferredDestinationsCsv !== null;
+  var preferredSet = hasPreferredDestinations
     ? new Set(preferredDestinationsCsv.split(',').filter(Boolean))
     : null;
 
@@ -1013,7 +1118,7 @@ function populateDestinations(preferredDestinationsCsv) {
 
     for (var di = 0; di < groups[groupName].length; di++) {
       var dest = groups[groupName][di];
-      var checked = preferredSet ? preferredSet.has(dest.code) : false;
+      var checked = preferredSet ? preferredSet.has(dest.code) : true;
       html += '<label class="dest-option"><input type="checkbox" class="dest-cb" value="' +
         escapeAttr(dest.code) + '"' + (checked ? ' checked' : '') + '><span>' + escapeHtml(dest.label) + '</span></label>';
     }
@@ -1075,6 +1180,7 @@ function initApp() {
   var fromDropdown = document.querySelector('.from-dropdown');
   var destToggle = document.querySelector('.dest-toggle');
   var destDropdown = document.querySelector('.dest-dropdown');
+  var swapRouteBtn = document.querySelector('.swap-route-btn');
 
   if (fromToggle && fromDropdown) {
     fromToggle.addEventListener('click', function(e) {
@@ -1099,17 +1205,21 @@ function initApp() {
     }
   });
 
-  document.querySelector('.dest-select-all').addEventListener('click', function() {
-    document.querySelectorAll('.dest-cb').forEach(function(cb) { cb.checked = true; });
-    updateDestToggleLabel();
-    invalidateAndRender();
-  });
+  var destSelectAllCb = document.querySelector('.dest-select-all-cb');
+  if (destSelectAllCb) {
+    destSelectAllCb.addEventListener('change', function() {
+      var shouldSelectAll = destSelectAllCb.checked;
+      document.querySelectorAll('.dest-cb').forEach(function(cb) { cb.checked = shouldSelectAll; });
+      updateDestToggleLabel();
+      invalidateAndRender();
+    });
+  }
 
-  document.querySelector('.dest-select-none').addEventListener('click', function() {
-    document.querySelectorAll('.dest-cb').forEach(function(cb) { cb.checked = false; });
-    updateDestToggleLabel();
-    invalidateAndRender();
-  });
+  if (swapRouteBtn) {
+    swapRouteBtn.addEventListener('click', function() {
+      swapFromToSelection();
+    });
+  }
 
   // Filter listeners - these invalidate combo cache
   document.querySelector('.cabin-min').addEventListener('change', invalidateAndRender);
