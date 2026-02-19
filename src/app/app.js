@@ -416,6 +416,11 @@ function estimateTaxesFeesGBP(destCode, outCabin, inCabin, travellers) {
   return perTraveller * travellers;
 }
 
+function estimateTaxesFeesOneWayGBP(destCode, cabin, travellers, reverse) {
+  var direction = reverse ? 'inbound' : 'outbound';
+  return getLegEstimatedFeesGBP(destCode, direction, cabin) * travellers;
+}
+
 var CABIN_MIN_OPTIONS = [
   { value: 'economy', label: 'Economy +' },
   { value: 'premium', label: 'Premium +' },
@@ -445,12 +450,18 @@ function generateSearchUrl(origin, destination, departDate, returnDate, adults) 
     passengers: 'a' + adults + 't0c0i0',
     awardSearch: 'true'
   });
-  params.append('origin', origin);
-  params.append('origin', destination);
-  params.append('destination', destination);
-  params.append('destination', origin);
-  params.append('departing', departDate);
-  params.append('departing', returnDate);
+  if (returnDate) {
+    params.append('origin', origin);
+    params.append('origin', destination);
+    params.append('destination', destination);
+    params.append('destination', origin);
+    params.append('departing', departDate);
+    params.append('departing', returnDate);
+  } else {
+    params.append('origin', origin);
+    params.append('destination', destination);
+    params.append('departing', departDate);
+  }
   return 'https://www.virginatlantic.com/flights/search/slice?' + params.toString();
 }
 
@@ -470,10 +481,14 @@ function getFilterState() {
     dateEnd = tmp;
   }
   if (adults < 1) adults = 1;
+  var tripTypeInput = document.querySelector('.trip-type');
+  var tripType = tripTypeInput ? tripTypeInput.value : 'return';
+  if (tripType !== 'oneway') tripType = 'return';
   var balance = parseInt(document.querySelector('.points-balance').value) || 0;
   var bonusRate = parseInt(document.querySelector('.bonus-rate').value) || 0;
   if (bonusRate < 0) bonusRate = 0;
   return {
+    tripType: tripType,
     cabinMin: cabinMin,
     minNights: minNights,
     maxNights: maxNights,
@@ -498,7 +513,7 @@ function computeTopUpMeta(totalPts, filters) {
   };
 }
 
-// ===== Check if a cabin combo passes filter =====
+// ===== Check if a cabin combination passes filter =====
 function cabinPassesFilter(outCabin, inCabin, filters) {
   var minRank = getCabinRank(filters.cabinMin);
   var outRank = getCabinRank(outCabin);
@@ -506,8 +521,8 @@ function cabinPassesFilter(outCabin, inCabin, filters) {
   return outRank >= minRank && inRank >= minRank;
 }
 
-// ===== Compute combos for a destination using current filters =====
-function computeCombos(routeRef, filters) {
+// ===== Compute return trip combinations for a route =====
+function computeReturnCombos(routeRef, filters) {
   var routeCode = typeof routeRef === 'string' ? routeRef : routeRef.routeCode;
   var reverse = !!(routeRef && typeof routeRef === 'object' && routeRef.reverse);
   var data = RAW_DATA[routeCode];
@@ -585,6 +600,7 @@ function computeCombos(routeRef, filters) {
             inIsSaver: inIsSaver,
             remainingSeats: remainingSeats,
             remainingSeatsDisplay: remainingSeatsDisplay,
+            reverse: reverse,
             dest: routeMeta ? routeMeta.routeCode : routeCode,
             destLabel: routeMeta
               ? (routeMeta.routeLabel || (routeMeta.originName + ' -> ' + routeMeta.destinationName))
@@ -600,10 +616,72 @@ function computeCombos(routeRef, filters) {
   return combos;
 }
 
+// ===== Compute one-way flights for a route =====
+function computeOneWayFlights(routeRef, filters) {
+  var routeCode = typeof routeRef === 'string' ? routeRef : routeRef.routeCode;
+  var reverse = !!(routeRef && typeof routeRef === 'object' && routeRef.reverse);
+  var data = RAW_DATA[routeCode];
+  if (!data) return [];
+
+  var outbound = reverse ? data.inbound : data.outbound;
+  if (!outbound) return [];
+  var combos = [];
+  var cabins = ['economy', 'premium', 'upper'];
+
+  var outDates = Object.keys(outbound).sort();
+  for (var di = 0; di < outDates.length; di++) {
+    var departDate = outDates[di];
+    if (filters.dateStart && departDate < filters.dateStart) continue;
+    if (filters.dateEnd && departDate > filters.dateEnd) continue;
+    var outPricing = outbound[departDate];
+
+    for (var oi = 0; oi < cabins.length; oi++) {
+      var outCabin = cabins[oi];
+      if (outPricing[outCabin] === undefined) continue;
+      if (getCabinRank(outCabin) < getCabinRank(filters.cabinMin)) continue;
+
+      var outSeats = getCabinSeatCount(outPricing, outCabin);
+      var outSeatsDisplay = getCabinSeatDisplay(outPricing, outCabin);
+      var outIsSaver = getCabinIsSaver(outPricing, outCabin);
+      if (outSeats !== null && outSeats < filters.adults) continue;
+
+      var outPts = outPricing[outCabin] * filters.adults;
+      var routeMeta = (routeRef && typeof routeRef === 'object') ? routeRef : null;
+
+      combos.push({
+        depart: departDate,
+        ret: null,
+        nights: null,
+        outCabin: outCabin,
+        inCabin: null,
+        outPts: outPts,
+        inPts: 0,
+        totalPts: outPts,
+        outSeats: outSeats,
+        inSeats: null,
+        outSeatsDisplay: outSeatsDisplay,
+        inSeatsDisplay: null,
+        outIsSaver: outIsSaver,
+        inIsSaver: false,
+        remainingSeats: outSeats,
+        remainingSeatsDisplay: outSeatsDisplay || (outSeats === null ? null : String(outSeats)),
+        reverse: reverse,
+        dest: routeMeta ? routeMeta.routeCode : routeCode,
+        destLabel: routeMeta
+          ? (routeMeta.routeLabel || (routeMeta.originName + ' -> ' + routeMeta.destinationName))
+          : routeCode,
+        originCode: routeMeta ? routeMeta.originCode : null,
+        destinationCode: routeMeta ? routeMeta.destinationCode : null
+      });
+    }
+  }
+  return combos;
+}
+
 // ===== Sort state per destination =====
 var sortState = {};
 
-function sortCombos(combos, column, direction, filters) {
+function sortResults(combos, column, direction, filters) {
   combos.sort(function(a, b) {
     var aVal, bVal;
     switch (column) {
@@ -619,8 +697,13 @@ function sortCombos(combos, column, direction, filters) {
         bVal = b.remainingSeats === null ? -1 : b.remainingSeats;
         break;
       case 'taxesFees':
-        aVal = estimateTaxesFeesGBP(a.destinationCode || a.dest, a.outCabin, a.inCabin, filters.adults);
-        bVal = estimateTaxesFeesGBP(b.destinationCode || b.dest, b.outCabin, b.inCabin, filters.adults);
+        if (a.inCabin === null) {
+          aVal = estimateTaxesFeesOneWayGBP(a.destinationCode || a.dest, a.outCabin, filters.adults, a.reverse);
+          bVal = estimateTaxesFeesOneWayGBP(b.destinationCode || b.dest, b.outCabin, filters.adults, b.reverse);
+        } else {
+          aVal = estimateTaxesFeesGBP(a.destinationCode || a.dest, a.outCabin, a.inCabin, filters.adults);
+          bVal = estimateTaxesFeesGBP(b.destinationCode || b.dest, b.outCabin, b.inCabin, filters.adults);
+        }
         break;
       case 'totalPoints': aVal = a.totalPts; bVal = b.totalPts; break;
       case 'topUpCost': aVal = a.totalPts; bVal = b.totalPts; break;
@@ -637,8 +720,8 @@ function sortCombos(combos, column, direction, filters) {
 // ===== Pagination state per destination =====
 var paginationState = {};
 
-// ===== Cached combos per destination (recomputed when filters change) =====
-var comboCache = {};
+// ===== Cached results per route (recomputed when filters change) =====
+var resultsCache = {};
 
 // ===== Get currently selected destinations =====
 function getSelectedDestinations() {
@@ -753,10 +836,17 @@ function updateFiltersSummary() {
     parts.push(ds + ' \u2013 ' + de);
   }
 
-  var minN = document.querySelector('.nights-min').value;
-  var maxN = document.querySelector('.nights-max').value;
-  if (minN === maxN) parts.push(minN + ' nights');
-  else parts.push(minN + '\u2013' + maxN + ' nights');
+  var tripTypeSelect = document.querySelector('.trip-type');
+  var isOneWay = tripTypeSelect && tripTypeSelect.value === 'oneway';
+
+  if (isOneWay) {
+    parts.push('One-way');
+  } else {
+    var minN = document.querySelector('.nights-min').value;
+    var maxN = document.querySelector('.nights-max').value;
+    if (minN === maxN) parts.push(minN + ' nights');
+    else parts.push(minN + '\u2013' + maxN + ' nights');
+  }
 
   var adults = document.querySelector('.adults-count').value;
   parts.push(adults + (adults === '1' ? ' traveller' : ' travellers'));
@@ -767,7 +857,59 @@ function updateFiltersSummary() {
   el.textContent = parts.join('  \u00B7  ');
 }
 
-// ===== Render current page of combos =====
+// ===== Dynamic table head =====
+function getTableHeadHtml(tripType) {
+  if (tripType === 'oneway') {
+    return '<tr>' +
+      '<th class="sortable" data-column="origin">From</th>' +
+      '<th class="sortable" data-column="destination">To</th>' +
+      '<th class="sortable" data-column="depart">Depart</th>' +
+      '<th class="sortable" data-column="outCabin">Cabin</th>' +
+      '<th class="sortable" data-column="remainingSeats">Seats</th>' +
+      '<th class="sortable" data-column="taxesFees">Est. Taxes/Fees</th>' +
+      '<th class="sortable" data-column="totalPoints">Points</th>' +
+      '<th class="sortable" data-column="topUpCost">Top-Up Cost</th>' +
+      '<th></th>' +
+      '</tr>';
+  }
+  return '<tr>' +
+    '<th class="sortable" data-column="origin">From</th>' +
+    '<th class="sortable" data-column="destination">To</th>' +
+    '<th class="sortable" data-column="depart">Depart</th>' +
+    '<th class="sortable" data-column="return">Return</th>' +
+    '<th class="sortable" data-column="nights">Nights</th>' +
+    '<th class="sortable" data-column="outCabin">Out</th>' +
+    '<th class="sortable" data-column="inCabin">In</th>' +
+    '<th class="sortable" data-column="remainingSeats">Seats</th>' +
+    '<th class="sortable" data-column="taxesFees">Est. Taxes/Fees</th>' +
+    '<th class="sortable" data-column="totalPoints">Points</th>' +
+    '<th class="sortable" data-column="topUpCost">Top-Up Cost</th>' +
+    '<th></th>' +
+    '</tr>';
+}
+
+function bindSortHeaders() {
+  document.querySelectorAll('.results-table th.sortable').forEach(function(header) {
+    header.addEventListener('click', function() {
+      var column = header.dataset.column;
+      var ss = sortState['_global'] || { column: 'totalPoints', direction: 'asc' };
+      if (ss.column === column) {
+        ss.direction = ss.direction === 'asc' ? 'desc' : 'asc';
+      } else {
+        ss.direction = 'asc';
+      }
+      ss.column = column;
+      sortState['_global'] = ss;
+
+      if (paginationState['_global']) {
+        paginationState['_global'].currentPage = 1;
+      }
+      render();
+    });
+  });
+}
+
+// ===== Render current page =====
 function render() {
   var selectedDestinations = getSelectedDestinations();
   var departureCode = getDepartureSelection();
@@ -783,24 +925,38 @@ function render() {
   }
 
   var filters = getFilterState();
+  var isOneWay = filters.tripType === 'oneway';
 
-  // Merge combos from all selected destinations
+  // Reset sort if current column doesn't exist in one-way mode
+  if (isOneWay) {
+    var ss = sortState['_global'];
+    if (ss && (ss.column === 'return' || ss.column === 'nights' || ss.column === 'inCabin')) {
+      ss.column = 'totalPoints';
+      ss.direction = 'asc';
+    }
+  }
+
+  // Merge results from all selected destinations
   var combos = [];
   for (var di = 0; di < selectedDestinations.length; di++) {
     var destinationCode = selectedDestinations[di];
     var routeRef = ROUTES_BY_OD[departureCode + '|' + destinationCode];
     if (!routeRef) continue;
-    var comboCacheKey = routeRef.cacheKey || (routeRef.routeCode + (routeRef.reverse ? '|rev' : ''));
+    var resultsCacheKey = routeRef.cacheKey || (routeRef.routeCode + (routeRef.reverse ? '|rev' : ''));
 
-    if (!comboCache[comboCacheKey]) {
-      comboCache[comboCacheKey] = computeCombos(routeRef, filters);
+    if (!resultsCache[resultsCacheKey]) {
+      if (isOneWay) {
+        resultsCache[resultsCacheKey] = computeOneWayFlights(routeRef, filters);
+      } else {
+        resultsCache[resultsCacheKey] = computeReturnCombos(routeRef, filters);
+      }
     }
-    var destCombos = comboCache[comboCacheKey];
+    var destCombos = resultsCache[resultsCacheKey];
     for (var ci = 0; ci < destCombos.length; ci++) combos.push(destCombos[ci]);
   }
 
   var ss = sortState['_global'] || { column: 'totalPoints', direction: 'asc' };
-  sortCombos(combos, ss.column, ss.direction, filters);
+  sortResults(combos, ss.column, ss.direction, filters);
 
   var totalCombos = combos.length;
   var state = paginationState['_global'] || { currentPage: 1, rowsPerPage: 50 };
@@ -892,44 +1048,73 @@ function render() {
 
     var routeOrigin = c.originCode || getRouteParts(c.dest).origin;
     var routeDestination = c.destinationCode || getRouteParts(c.dest).destination;
-    var searchUrl = generateSearchUrl(routeOrigin, routeDestination, c.depart, c.ret, adults);
-    var estFees = estimateTaxesFeesGBP(routeDestination || c.dest, c.outCabin, c.inCabin, adults);
-    var remainingSeatsLabel = c.remainingSeatsDisplay || (c.remainingSeats === null ? '-' : String(c.remainingSeats));
-    var remainingSeatsTooltip = 'Outbound seats: ' + (c.outSeatsDisplay || (c.outSeats === null ? 'Unknown' : String(c.outSeats))) +
-      '\nInbound seats: ' + (c.inSeatsDisplay || (c.inSeats === null ? 'Unknown' : String(c.inSeats))) +
-      '\nRemaining seats for return option: ' + (c.remainingSeatsDisplay || (c.remainingSeats === null ? 'Unknown' : String(c.remainingSeats)));
-    var outCabinHtml = '<span class="cabin-leg cabin-' + c.outCabin + '"><span class="cabin-label">' +
-      formatCabin(c.outCabin) + (c.outIsSaver ? saverTagIconHtml() : '') + '</span></span>';
-    var inCabinHtml = '<span class="cabin-leg cabin-' + c.inCabin + '"><span class="cabin-label">' +
-      formatCabin(c.inCabin) + (c.inIsSaver ? saverTagIconHtml() : '') + '</span></span>';
 
-    rowsHtml += '<tr>' +
-      '<td>' + (routeOrigin || '-') + '</td>' +
-      '<td>' + (routeDestination || '-') + '</td>' +
-      '<td>' + formatDate(c.depart) + '</td>' +
-      '<td>' + formatDate(c.ret) + '</td>' +
-      '<td>' + c.nights + '</td>' +
-      '<td>' + outCabinHtml + '</td>' +
-      '<td>' + inCabinHtml + '</td>' +
-      '<td title="' + escapeAttr(remainingSeatsTooltip) + '">' + remainingSeatsLabel + '</td>' +
-      '<td class="fees" title="Estimated taxes and carrier fees">' + formatCurrencyGBP(estFees) + '</td>' +
-      '<td class="points" style="' + pointsStyle + '">' + formatPoints(c.totalPts) + '</td>' +
-      topUpHtml +
-      '<td><a href="' + escapeAttr(searchUrl) + '" target="_blank" class="external-link search-link">Go</a></td>' +
-      '</tr>';
+    if (isOneWay) {
+      var searchUrl = generateSearchUrl(routeOrigin, routeDestination, c.depart, null, adults);
+      var estFees = estimateTaxesFeesOneWayGBP(routeDestination || c.dest, c.outCabin, adults, c.reverse);
+      var cabinHtml = '<span class="cabin-leg cabin-' + c.outCabin + '"><span class="cabin-label">' +
+        formatCabin(c.outCabin) + (c.outIsSaver ? saverTagIconHtml() : '') + '</span></span>';
+      var seatsLabel = c.outSeatsDisplay || (c.outSeats === null ? '-' : String(c.outSeats));
+      var seatsTooltip = 'Seats: ' + seatsLabel;
+
+      rowsHtml += '<tr>' +
+        '<td>' + (routeOrigin || '-') + '</td>' +
+        '<td>' + (routeDestination || '-') + '</td>' +
+        '<td>' + formatDate(c.depart) + '</td>' +
+        '<td>' + cabinHtml + '</td>' +
+        '<td title="' + escapeAttr(seatsTooltip) + '">' + seatsLabel + '</td>' +
+        '<td class="fees" title="Estimated taxes and carrier fees">' + formatCurrencyGBP(estFees) + '</td>' +
+        '<td class="points" style="' + pointsStyle + '">' + formatPoints(c.totalPts) + '</td>' +
+        topUpHtml +
+        '<td><a href="' + escapeAttr(searchUrl) + '" target="_blank" class="external-link search-link">Go</a></td>' +
+        '</tr>';
+    } else {
+      var searchUrl = generateSearchUrl(routeOrigin, routeDestination, c.depart, c.ret, adults);
+      var estFees = estimateTaxesFeesGBP(routeDestination || c.dest, c.outCabin, c.inCabin, adults);
+      var remainingSeatsLabel = c.remainingSeatsDisplay || (c.remainingSeats === null ? '-' : String(c.remainingSeats));
+      var remainingSeatsTooltip = 'Outbound seats: ' + (c.outSeatsDisplay || (c.outSeats === null ? 'Unknown' : String(c.outSeats))) +
+        '\nInbound seats: ' + (c.inSeatsDisplay || (c.inSeats === null ? 'Unknown' : String(c.inSeats))) +
+        '\nRemaining seats for return option: ' + (c.remainingSeatsDisplay || (c.remainingSeats === null ? 'Unknown' : String(c.remainingSeats)));
+      var outCabinHtml = '<span class="cabin-leg cabin-' + c.outCabin + '"><span class="cabin-label">' +
+        formatCabin(c.outCabin) + (c.outIsSaver ? saverTagIconHtml() : '') + '</span></span>';
+      var inCabinHtml = '<span class="cabin-leg cabin-' + c.inCabin + '"><span class="cabin-label">' +
+        formatCabin(c.inCabin) + (c.inIsSaver ? saverTagIconHtml() : '') + '</span></span>';
+
+      rowsHtml += '<tr>' +
+        '<td>' + (routeOrigin || '-') + '</td>' +
+        '<td>' + (routeDestination || '-') + '</td>' +
+        '<td>' + formatDate(c.depart) + '</td>' +
+        '<td>' + formatDate(c.ret) + '</td>' +
+        '<td>' + c.nights + '</td>' +
+        '<td>' + outCabinHtml + '</td>' +
+        '<td>' + inCabinHtml + '</td>' +
+        '<td title="' + escapeAttr(remainingSeatsTooltip) + '">' + remainingSeatsLabel + '</td>' +
+        '<td class="fees" title="Estimated taxes and carrier fees">' + formatCurrencyGBP(estFees) + '</td>' +
+        '<td class="points" style="' + pointsStyle + '">' + formatPoints(c.totalPts) + '</td>' +
+        topUpHtml +
+        '<td><a href="' + escapeAttr(searchUrl) + '" target="_blank" class="external-link search-link">Go</a></td>' +
+        '</tr>';
+    }
   }
 
-  document.querySelector('.results-table tbody').innerHTML = rowsHtml;
+  // Update table head and body
+  var resultsTable = document.querySelector('.results-table');
+  resultsTable.classList.toggle('trip-oneway', isOneWay);
+  resultsTable.querySelector('thead').innerHTML = getTableHeadHtml(filters.tripType);
+  resultsTable.querySelector('tbody').innerHTML = rowsHtml;
+  bindSortHeaders();
 
   // Update summary
   var comboCountEl = document.querySelector('.combo-count');
   var visibleCountEl = document.querySelector('.visible-count');
   var pageRangeEl = document.querySelector('.page-range');
+  var tripTypeLabel = document.querySelector('.trip-type-label');
   if (comboCountEl) comboCountEl.textContent = totalCombos;
   if (visibleCountEl) visibleCountEl.textContent = visibleCombos;
   if (pageRangeEl) {
     pageRangeEl.textContent = visibleCombos === 0 ? '0' : (startIdx + 1) + '-' + endIdx;
   }
+  if (tripTypeLabel) tripTypeLabel.textContent = isOneWay ? 'one-way' : 'return';
 
   // Pagination controls
   var prevBtn = document.querySelector('.prev-btn');
@@ -1008,6 +1193,11 @@ function saveFiltersToHash() {
   });
   if (!allChecked) params.set('dest', selectedDests.join(','));
 
+  var tripTypeSelect = document.querySelector('.trip-type');
+  if (tripTypeSelect && tripTypeSelect.value !== 'return') {
+    params.set('trip', tripTypeSelect.value);
+  }
+
   var cabinMin = document.querySelector('.cabin-min');
   if (cabinMin) params.set('cabinMin', cabinMin.value);
   var showCostCols = document.querySelector('.show-cost-cols');
@@ -1040,6 +1230,12 @@ function restoreFiltersFromHash() {
 
   var params;
   try { params = new URLSearchParams(hash); } catch(e) { return; }
+
+  var trip = params.get('trip');
+  if (trip === 'oneway') {
+    var tripTypeSelect = document.querySelector('.trip-type');
+    if (tripTypeSelect) tripTypeSelect.value = 'oneway';
+  }
 
   var origin = params.get('origin');
   if (origin) setDepartureSelection(origin);
@@ -1100,9 +1296,19 @@ function restoreFiltersFromHash() {
   }
 }
 
-// ===== Invalidate combo cache and re-render =====
+// ===== Invalidate results cache and re-render =====
+function updateTripTypeUI() {
+  var tripType = document.querySelector('.trip-type');
+  var isOneWay = tripType && tripType.value === 'oneway';
+  var nightsMin = document.querySelector('.nights-min');
+  var nightsSection = nightsMin ? nightsMin.closest('.filter-section') : null;
+  if (nightsSection) {
+    nightsSection.style.display = isOneWay ? 'none' : '';
+  }
+}
+
 function invalidateAndRender() {
-  comboCache = {};
+  resultsCache = {};
   for (var dest in paginationState) {
     paginationState[dest].currentPage = 1;
   }
@@ -1189,6 +1395,7 @@ function initApp() {
 
   // Restore saved filters from URL hash
   restoreFiltersFromHash();
+  updateTripTypeUI();
   bindFromOptionEvents();
   bindDestinationCheckboxEvents();
   updateFromToggleLabel();
@@ -1275,7 +1482,11 @@ function initApp() {
     });
   }
 
-  // Filter listeners - these invalidate combo cache
+  // Filter listeners - these invalidate results cache
+  bindEvent('.trip-type', 'change', function() {
+    updateTripTypeUI();
+    invalidateAndRender();
+  });
   bindEvent('.cabin-min', 'change', invalidateAndRender);
   bindEvent('.nights-min', 'input', invalidateAndRender);
   bindEvent('.nights-max', 'input', invalidateAndRender);
@@ -1283,29 +1494,9 @@ function initApp() {
   bindEvent('.date-end', 'input', invalidateAndRender);
   bindEvent('.adults-count', 'input', invalidateAndRender);
 
-  // These only affect display, not combos
+  // These only affect display, not results
   bindEvent('.points-balance', 'input', function() { saveFiltersToHash(); render(); });
   bindEvent('.bonus-rate', 'input', function() { saveFiltersToHash(); render(); });
-
-  // Sorting
-  document.querySelectorAll('.results-table th.sortable').forEach(function(header) {
-    header.addEventListener('click', function() {
-      var column = header.dataset.column;
-      var ss = sortState['_global'] || { column: 'totalPoints', direction: 'asc' };
-      if (ss.column === column) {
-        ss.direction = ss.direction === 'asc' ? 'desc' : 'asc';
-      } else {
-        ss.direction = 'asc';
-      }
-      ss.column = column;
-      sortState['_global'] = ss;
-
-      if (paginationState['_global']) {
-        paginationState['_global'].currentPage = 1;
-      }
-      render();
-    });
-  });
 
   // Pagination controls
   bindEvent('.prev-btn', 'click', function() {

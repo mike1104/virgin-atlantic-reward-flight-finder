@@ -60,6 +60,15 @@
 
         <div class="filters-row filters-row-trip">
           <div class="filter-section">
+            <label class="filter-label">
+              Trip:
+              <select class="filter-select trip-type">
+                <option value="return" selected>Return</option>
+                <option value="oneway">One-way</option>
+              </select>
+            </label>
+          </div>
+          <div class="filter-section">
             <span class="filter-label">Travel Window:</span>
             <input type="date" class="date-input date-start">
             <span class="range-separator">to</span>
@@ -117,7 +126,7 @@
     </div>
 
     <div class="results-area">
-      <p class="summary"><span class="combo-count">0</span> return options found (<span class="visible-count">0</span> visible, showing <span class="page-range">0</span>)</p>
+      <p class="summary"><span class="combo-count">0</span> <span class="trip-type-label">return</span> options found (<span class="visible-count">0</span> visible, showing <span class="page-range">0</span>)</p>
       <div class="table-scroll">
         <table class="results-table">
           <thead>

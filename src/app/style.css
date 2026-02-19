@@ -682,12 +682,20 @@ tbody tr:last-child td {
   font-size: 13px;
 }
 
-/* Hide taxes/fees (col 9) and top-up cost (col 11) when cost columns are off
-   Column order: From(1) To(2) Depart(3) Return(4) Nights(5) Out(6) In(7) Seats(8) Fees(9) Points(10) TopUp(11) Book(12) */
-.results-table.hide-cost-cols th:nth-child(9),
-.results-table.hide-cost-cols td:nth-child(9),
-.results-table.hide-cost-cols th:nth-child(11),
-.results-table.hide-cost-cols td:nth-child(11) {
+/* Hide cost columns when toggled off.
+   Return columns (12): From(1) To(2) Depart(3) Return(4) Nights(5) Out(6) In(7) Seats(8) Fees(9) Points(10) TopUp(11) Book(12)
+   One-way columns (9): From(1) To(2) Depart(3) Cabin(4) Seats(5) Fees(6) Points(7) TopUp(8) Book(9) */
+.results-table.hide-cost-cols:not(.trip-oneway) th:nth-child(9),
+.results-table.hide-cost-cols:not(.trip-oneway) td:nth-child(9),
+.results-table.hide-cost-cols:not(.trip-oneway) th:nth-child(11),
+.results-table.hide-cost-cols:not(.trip-oneway) td:nth-child(11) {
+  display: none;
+}
+
+.results-table.hide-cost-cols.trip-oneway th:nth-child(6),
+.results-table.hide-cost-cols.trip-oneway td:nth-child(6),
+.results-table.hide-cost-cols.trip-oneway th:nth-child(8),
+.results-table.hide-cost-cols.trip-oneway td:nth-child(8) {
   display: none;
 }
 
@@ -1019,12 +1027,18 @@ tbody tr:last-child td {
     padding: 8px 6px;
   }
 
-  /* Hide Seats(8), Fees(9) on mobile
-     Column order: From(1) To(2) Depart(3) Return(4) Nights(5) Out(6) In(7) Seats(8) Fees(9) Points(10) TopUp(11) Book(12) */
-  th:nth-child(8),
-  td:nth-child(8),
-  th:nth-child(9),
-  td:nth-child(9) {
+  /* Hide Seats & Fees on mobile — return mode: cols 8,9; one-way mode: cols 5,6 */
+  .results-table:not(.trip-oneway) th:nth-child(8),
+  .results-table:not(.trip-oneway) td:nth-child(8),
+  .results-table:not(.trip-oneway) th:nth-child(9),
+  .results-table:not(.trip-oneway) td:nth-child(9) {
+    display: none;
+  }
+
+  .results-table.trip-oneway th:nth-child(5),
+  .results-table.trip-oneway td:nth-child(5),
+  .results-table.trip-oneway th:nth-child(6),
+  .results-table.trip-oneway td:nth-child(6) {
     display: none;
   }
 
