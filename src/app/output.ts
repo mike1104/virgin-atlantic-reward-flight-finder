@@ -47,12 +47,22 @@ function copyStaticAssets(): void {
 type DestinationDataMap = Map<string, { outbound: MonthData[]; inbound: MonthData[] }>;
 type DestinationMeta = Pick<Destination, "code" | "name" | "group" | "originCode" | "destinationCode">;
 
+function stripLegacyPerDayMetadata(monthData: MonthData): MonthData {
+  const sanitized: MonthData = {};
+  for (const [date, pricing] of Object.entries(monthData)) {
+    const nextPricing = { ...pricing };
+    delete (nextPricing as { scrapedAt?: string }).scrapedAt;
+    sanitized[date] = nextPricing;
+  }
+  return sanitized;
+}
+
 function buildRawData(destinationData: DestinationDataMap): Record<string, { outbound: MonthData; inbound: MonthData }> {
   const rawData: Record<string, { outbound: MonthData; inbound: MonthData }> = {};
   for (const [dest, data] of destinationData) {
     rawData[dest] = {
-      outbound: mergeMonthData(data.outbound),
-      inbound: mergeMonthData(data.inbound),
+      outbound: stripLegacyPerDayMetadata(mergeMonthData(data.outbound)),
+      inbound: stripLegacyPerDayMetadata(mergeMonthData(data.inbound)),
     };
   }
   return rawData;
@@ -71,6 +81,13 @@ export function writeDestinationMetadata(
   outputMetadataFilename: string = "destinations.json"
 ): void {
   writeOutput(outputMetadataFilename, JSON.stringify(destinations));
+}
+
+export function writeScrapeMetadata(
+  scrapedAt: string,
+  outputMetadataFilename: string = "scrape-metadata.json"
+): void {
+  writeOutput(outputMetadataFilename, JSON.stringify({ scrapedAt }));
 }
 
 export function buildReportShell(

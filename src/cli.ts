@@ -3,7 +3,7 @@
 import * as fs from "fs";
 import * as readline from "readline";
 import { chromium } from "playwright";
-import { writeReportData, writeDestinationMetadata, buildReportShell } from "./app/output";
+import { writeReportData, writeDestinationMetadata, writeScrapeMetadata, buildReportShell } from "./app/output";
 import { scrapeDestinations } from "./scraper/destinations";
 import { scrapeMonth } from "./scraper/month";
 import { Destination, MonthData, YearMonth } from "./shared/types";
@@ -31,6 +31,7 @@ const SCRAPE_METADATA_CACHE = "scrape-metadata.json";
 const FLIGHTS_DATASET_CACHE = "flights-dataset.json";
 const OUTPUT_FLIGHTS_DATA_FILE = "flights-data.json";
 const OUTPUT_DESTINATIONS_FILE = "destinations.json";
+const OUTPUT_SCRAPE_METADATA_FILE = "scrape-metadata.json";
 const OUTPUT_REPORT_FILE = "index.html";
 
 type ScrapeProgressSnapshot = {
@@ -208,28 +209,6 @@ function deserializeDestinationData(
   return new Map(Object.entries(data));
 }
 
-function ensureScrapeTimestampsInDestinationData(
-  destinationData: Map<string, { outbound: MonthData[]; inbound: MonthData[] }>,
-  fallbackScrapedAt: string
-): boolean {
-  let mutated = false;
-
-  destinationData.forEach((routeData) => {
-    [routeData.outbound, routeData.inbound].forEach((months) => {
-      months.forEach((monthData) => {
-        Object.values(monthData).forEach((dayData) => {
-          if (!dayData.scrapedAt) {
-            dayData.scrapedAt = fallbackScrapedAt;
-            mutated = true;
-          }
-        });
-      });
-    });
-  });
-
-  return mutated;
-}
-
 function getRouteEndpoints(route: Destination): { originCode: string | null; destinationCode: string | null } {
   const [fallbackOrigin, fallbackDestination] = route.code.split("-");
   return {
@@ -286,18 +265,13 @@ function filterDestinationsMetadata(
   return destinations.filter((destination) => available.has(destination.code));
 }
 
-function loadDestinationDataFromCache(manifest: ScrapeManifest): Map<string, { outbound: MonthData[]; inbound: MonthData[] }> {
+function loadDestinationDataFromCache(): Map<string, { outbound: MonthData[]; inbound: MonthData[] }> {
   const cachedDestinationData = loadFlightsDatasetCache();
   if (!cachedDestinationData || Object.keys(cachedDestinationData).length === 0) {
     return new Map<string, { outbound: MonthData[]; inbound: MonthData[] }>();
   }
 
-  const destinationData = deserializeDestinationData(cachedDestinationData);
-  const migrated = ensureScrapeTimestampsInDestinationData(destinationData, manifest.scrapedAt);
-  if (migrated) {
-    writeCache(FLIGHTS_DATASET_CACHE, serializeDestinationData(destinationData));
-  }
-  return destinationData;
+  return deserializeDestinationData(cachedDestinationData);
 }
 
 async function scrapeToCache(
@@ -698,7 +672,7 @@ async function processCommand(args: string[]): Promise<void> {
   const options = parseCliOptions(args);
 
   let manifest = loadScrapeMetadata();
-  let destinationData = manifest ? loadDestinationDataFromCache(manifest) : new Map<string, { outbound: MonthData[]; inbound: MonthData[] }>();
+  let destinationData = manifest ? loadDestinationDataFromCache() : new Map<string, { outbound: MonthData[]; inbound: MonthData[] }>();
 
   const legacyManifestFormat = !!manifest && manifest.destinations.some((route) => !isRouteCode(route.code));
   const requestedFromManifest = manifest ? filterRoutes(manifest.destinations, options.requestedRoutes) : [];
@@ -733,6 +707,7 @@ async function processCommand(args: string[]): Promise<void> {
   writeReportData(filteredDestinationData, OUTPUT_FLIGHTS_DATA_FILE);
   const filteredDestinations = filterDestinationsMetadata(routesToProcess, filteredDestinationData);
   writeDestinationMetadata(filteredDestinations, OUTPUT_DESTINATIONS_FILE);
+  writeScrapeMetadata(manifest.scrapedAt, OUTPUT_SCRAPE_METADATA_FILE);
   console.log(`🧱 Processed data file written for ${filteredDestinationData.size} routes: output/${OUTPUT_FLIGHTS_DATA_FILE}\n`);
 }
 
@@ -756,6 +731,7 @@ async function allCommand(args: string[]): Promise<void> {
 
   const filteredDestinations = filterDestinationsMetadata(routesToProcess, filteredDestinationData);
   writeDestinationMetadata(filteredDestinations, OUTPUT_DESTINATIONS_FILE);
+  writeScrapeMetadata(scraped.manifest.scrapedAt, OUTPUT_SCRAPE_METADATA_FILE);
   buildReportShell(OUTPUT_REPORT_FILE);
 
   console.log(`\nReport generated: output/${OUTPUT_REPORT_FILE}`);

@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Virgin Atlantic Reward Flights</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -12,14 +15,16 @@
     <header>
       <h1>Virgin Atlantic Reward Flights</h1>
       <p><a href="https://www.virginatlantic.com/reward-flight-finder" target="_blank" rel="noopener noreferrer" class="external-link finder-link">Go to the Official Reward Seat Checker</a></p>
+      <p class="last-scrape-status">Last update: <span class="last-scrape-value">Unknown</span></p>
     </header>
 
     <div class="filters-shell">
       <button type="button" class="filters-toggle" aria-expanded="true">
         <span>Filters</span>
       </button>
+      <div class="filters-summary"></div>
       <div class="global-filters">
-        <div class="filters-row filters-row-primary">
+        <div class="filters-row filters-row-route">
           <div class="filter-section">
             <span class="filter-label">From:</span>
             <div class="from-multiselect">
@@ -51,8 +56,11 @@
               </div>
             </div>
           </div>
+        </div>
+
+        <div class="filters-row filters-row-trip">
           <div class="filter-section">
-            <span class="filter-label">Date Range:</span>
+            <span class="filter-label">Travel Window:</span>
             <input type="date" class="date-input date-start">
             <span class="range-separator">to</span>
             <input type="date" class="date-input date-end">
@@ -63,9 +71,6 @@
             <span class="range-separator">to</span>
             <input type="number" class="range-input nights-max" value="12" min="1" max="365">
           </div>
-        </div>
-
-        <div class="filters-row filters-row-secondary">
           <div class="filter-section">
             <label class="filter-label">
               Travellers:
@@ -80,27 +85,32 @@
           </div>
         </div>
 
-        <div class="points-row">
-          <div class="filter-section">
-            <label class="filter-label">
-              Current Points Balance:
-              <input type="number" class="points-balance" placeholder="0" min="0" step="1000">
-            </label>
-          </div>
-          <div class="filter-section">
-            <label class="filter-label">
-              Bonus Points:
-              <input type="number" class="range-input bonus-rate" value="0" min="0" max="100" step="5">%
-            </label>
-          </div>
-          <div class="filter-section">
-            <label class="filter-checkbox">
-              <input type="checkbox" class="show-over-max" checked>
-              <span>Show options above max top-up</span>
-            </label>
-          </div>
-          <div class="filter-section">
-            <a href="https://vaabrowse.virginatlantic.com/gh/en/flying-club/earn-points/buy-points.html" target="_blank" rel="noopener noreferrer" class="external-link buy-points-link">Buy Virgin Points</a>
+        <div class="points-shell collapsed">
+          <button type="button" class="points-toggle" aria-expanded="false">
+            <span>Points & Cost</span>
+          </button>
+          <div class="points-row">
+            <div class="filter-section">
+              <label class="filter-label">
+                Balance:
+                <input type="number" class="points-balance" placeholder="0" min="0" step="1000">
+              </label>
+            </div>
+            <div class="filter-section">
+              <label class="filter-label" title="Extra percentage of points received during buy-points promotions (e.g. 60% means buying 10,000 pts gives 16,000)">
+                Bonus:
+                <input type="number" class="range-input bonus-rate" value="0" min="0" max="100" step="5">%
+              </label>
+            </div>
+            <div class="filter-section">
+              <label class="filter-checkbox">
+                <input type="checkbox" class="show-cost-cols">
+                <span>Show cost columns</span>
+              </label>
+            </div>
+            <div class="filter-section">
+              <a href="https://vaabrowse.virginatlantic.com/gh/en/flying-club/earn-points/buy-points.html" target="_blank" rel="noopener noreferrer" class="external-link buy-points-link">Buy Virgin Points</a>
+            </div>
           </div>
         </div>
       </div>
@@ -117,13 +127,13 @@
               <th class="sortable" data-column="depart">Depart</th>
               <th class="sortable" data-column="return">Return</th>
               <th class="sortable" data-column="nights">Nights</th>
-              <th class="sortable" data-column="cabin">Cabin</th>
+              <th class="sortable" data-column="outCabin">Out</th>
+              <th class="sortable" data-column="inCabin">In</th>
               <th class="sortable" data-column="remainingSeats">Seats</th>
-              <th class="sortable" data-column="scrapedAt">Last Updated</th>
               <th class="sortable" data-column="taxesFees">Est. Taxes/Fees</th>
               <th class="sortable" data-column="totalPoints">Points</th>
               <th class="sortable" data-column="topUpCost">Top-Up Cost</th>
-              <th>Book</th>
+              <th></th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -133,8 +143,8 @@
         <div class="pagination-info">
           <label>Rows per page:
             <select class="rows-per-page">
-              <option value="50">50</option>
-              <option value="100" selected>100</option>
+              <option value="50" selected>50</option>
+              <option value="100">100</option>
               <option value="200">200</option>
               <option value="500">500</option>
               <option value="9999999">All</option>

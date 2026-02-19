@@ -42,24 +42,7 @@ function logMonthRequestDetail(message: string): void {
   }
 }
 
-function addMissingScrapeTimestamps(
-  monthData: MonthData,
-  fallbackScrapedAt: string
-): { monthData: MonthData; mutated: boolean } {
-  let mutated = false;
-
-  for (const date of Object.keys(monthData)) {
-    const day = monthData[date];
-    if (!day.scrapedAt) {
-      day.scrapedAt = fallbackScrapedAt;
-      mutated = true;
-    }
-  }
-
-  return { monthData, mutated };
-}
-
-function buildMonthDataFromApiPayload(apiResponseRaw: unknown, scrapedAt: string): FetchMonthResult {
+function buildMonthDataFromApiPayload(apiResponseRaw: unknown): FetchMonthResult {
   if (!Array.isArray(apiResponseRaw)) {
     return { monthData: {}, status: "failed" };
   }
@@ -81,7 +64,6 @@ function buildMonthDataFromApiPayload(apiResponseRaw: unknown, scrapedAt: string
 
     const dateStr = day.date;
     monthData[dateStr] = {
-      scrapedAt,
       minPrice: day.minPrice ?? null,
       currency: day.currency ?? null,
       minAwardPointsTotal: day.minAwardPointsTotal ?? 0,
@@ -123,7 +105,6 @@ async function fetchMonthDataWithRequest(
   year: string
 ): Promise<FetchMonthResult> {
   try {
-    const scrapedAt = new Date().toISOString();
     const monthNum = Number(month);
     const monthName = Number.isInteger(monthNum) && monthNum >= 1 && monthNum <= 12
       ? MONTH_NAMES[monthNum - 1]
@@ -172,7 +153,7 @@ async function fetchMonthDataWithRequest(
     }
 
     const apiResponseRaw = await response.json();
-    return buildMonthDataFromApiPayload(apiResponseRaw, scrapedAt);
+    return buildMonthDataFromApiPayload(apiResponseRaw);
   } catch (error) {
     return { monthData: {}, status: "failed", failReason: getErrorMessage(error) };
   }
@@ -186,7 +167,6 @@ async function fetchMonthDataWithPageFallback(
   year: string
 ): Promise<FetchMonthResult> {
   try {
-    const scrapedAt = new Date().toISOString();
     const pageUrl = `https://www.virginatlantic.com/reward-flight-finder/results/month?origin=${origin}&destination=${destination}&month=${month}&year=${year}`;
     let lastApiStatus: number | null = null;
     let apiParseErrors = 0;
@@ -243,7 +223,7 @@ async function fetchMonthDataWithPageFallback(
         failReason: apiParseErrors > 0 ? "fallback API parse failure" : "fallback API timeout",
       };
     }
-    return buildMonthDataFromApiPayload(apiResponseRaw, scrapedAt);
+    return buildMonthDataFromApiPayload(apiResponseRaw);
   } catch (error) {
     return { monthData: {}, status: "failed", failReason: getErrorMessage(error) };
   }
@@ -265,21 +245,16 @@ export async function scrapeMonth(
     if (cached) {
       const cachePath = getCachePath(cacheFilename);
       const cacheStat = fs.statSync(cachePath);
-      const cacheMtimeIso = cacheStat.mtime.toISOString();
       const cacheAgeMs = Date.now() - cacheStat.mtime.getTime();
-      const { monthData: upgradedCached, mutated } = addMissingScrapeTimestamps(cached, cacheMtimeIso);
-      if (mutated) {
-        writeCache(cacheFilename, upgradedCached);
-      }
       if (cacheAgeMs > CACHE_MAX_AGE_MS) {
         logMonthRequestDetail(`  ↻ Refreshing ${origin} → ${destination} ${year}-${month} (cache older than 1 hour)`);
-      } else if (hasMissingSeatCounts(upgradedCached)) {
+      } else if (hasMissingSeatCounts(cached)) {
         logMonthRequestDetail(`  ↻ Refreshing ${origin} → ${destination} ${year}-${month} to capture seat counts`);
       } else {
         logMonthRequestDetail(`  ✓ Loaded ${origin} → ${destination} ${year}-${month} from cache`);
         return {
-          monthData: upgradedCached,
-          status: Object.keys(upgradedCached).length > 0 ? "success" : "empty",
+          monthData: cached,
+          status: Object.keys(cached).length > 0 ? "success" : "empty",
           fromCache: true,
         };
       }

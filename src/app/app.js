@@ -4,6 +4,7 @@ var ROUTE_META_BY_CODE = {};
 var ROUTES = [];
 var ROUTES_BY_OD = {};
 var ORIGIN_OPTIONS = [];
+var LAST_SCRAPE_COMPLETED_AT = null;
 
 // ===== Utility functions =====
 function addDays(dateStr, days) {
@@ -18,7 +19,7 @@ function formatCabin(cabin) {
 
 function formatDate(dateStr) {
   var d = new Date(dateStr);
-  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' });
 }
 
 function formatDateTime(dateStr) {
@@ -227,25 +228,15 @@ function parseIsoTimestamp(value) {
   return isNaN(ms) ? null : ms;
 }
 
-function getComboScrapedAtMs(outboundScrapedAt, inboundScrapedAt) {
-  var outMs = parseIsoTimestamp(outboundScrapedAt);
-  var inMs = parseIsoTimestamp(inboundScrapedAt);
-  if (outMs !== null && inMs !== null) return Math.min(outMs, inMs);
-  if (outMs !== null) return outMs;
-  if (inMs !== null) return inMs;
-  return null;
-}
-
-function formatAgeFromNow(scrapedAtMs, nowMs) {
-  if (scrapedAtMs === null) return 'Unknown';
-  var diffMs = Math.max(0, nowMs - scrapedAtMs);
-  var mins = Math.floor(diffMs / 60000);
-  if (mins < 1) return 'Just now';
-  if (mins < 60) return mins + 'm ago';
-  var hours = Math.floor(mins / 60);
-  if (hours < 24) return hours + 'h ago';
-  var days = Math.floor(hours / 24);
-  return days + 'd ago';
+function renderLastScrapeStatus() {
+  var el = document.querySelector('.last-scrape-value');
+  if (!el) return;
+  if (!LAST_SCRAPE_COMPLETED_AT) {
+    el.textContent = 'Unknown';
+    return;
+  }
+  var parsed = parseIsoTimestamp(LAST_SCRAPE_COMPLETED_AT);
+  el.textContent = parsed === null ? LAST_SCRAPE_COMPLETED_AT : formatDateTime(LAST_SCRAPE_COMPLETED_AT);
 }
 
 function getOutboundDateBounds() {
@@ -462,9 +453,6 @@ function getFilterState() {
   var balance = parseInt(document.querySelector('.points-balance').value) || 0;
   var bonusRate = parseInt(document.querySelector('.bonus-rate').value) || 0;
   if (bonusRate < 0) bonusRate = 0;
-  var showOverMaxInput = document.querySelector('.show-over-max');
-  var showOverMax = showOverMaxInput ? showOverMaxInput.checked : true;
-
   return {
     cabinMin: cabinMin,
     minNights: minNights,
@@ -473,8 +461,7 @@ function getFilterState() {
     dateEnd: dateEnd,
     adults: adults,
     balance: balance,
-    bonusRate: bonusRate,
-    showOverMax: showOverMax
+    bonusRate: bonusRate
   };
 }
 
@@ -576,10 +563,7 @@ function computeCombos(routeRef, filters) {
             outIsSaver: outIsSaver,
             inIsSaver: inIsSaver,
             remainingSeats: remainingSeats,
-            remainingSeatsDisplay: remainingSeatsDisplay,
-            outScrapedAt: outPricing.scrapedAt || null,
-            inScrapedAt: inPricing.scrapedAt || null,
-            scrapedAtMs: getComboScrapedAtMs(outPricing.scrapedAt, inPricing.scrapedAt)
+            remainingSeatsDisplay: remainingSeatsDisplay
           });
         }
       }
@@ -601,10 +585,8 @@ function sortCombos(combos, column, direction, filters) {
       case 'depart': aVal = a.depart; bVal = b.depart; break;
       case 'return': aVal = a.ret; bVal = b.ret; break;
       case 'nights': aVal = a.nights; bVal = b.nights; break;
-      case 'cabin':
-        aVal = getCabinComboSortRank(a.outCabin, a.inCabin);
-        bVal = getCabinComboSortRank(b.outCabin, b.inCabin);
-        break;
+      case 'outCabin': aVal = getCabinRank(a.outCabin) || 0; bVal = getCabinRank(b.outCabin) || 0; break;
+      case 'inCabin': aVal = getCabinRank(a.inCabin) || 0; bVal = getCabinRank(b.inCabin) || 0; break;
       case 'remainingSeats':
         aVal = a.remainingSeats === null ? -1 : a.remainingSeats;
         bVal = b.remainingSeats === null ? -1 : b.remainingSeats;
@@ -612,10 +594,6 @@ function sortCombos(combos, column, direction, filters) {
       case 'taxesFees':
         aVal = estimateTaxesFeesGBP(a.destinationCode || a.dest, a.outCabin, a.inCabin, filters.adults);
         bVal = estimateTaxesFeesGBP(b.destinationCode || b.dest, b.outCabin, b.inCabin, filters.adults);
-        break;
-      case 'scrapedAt':
-        aVal = a.scrapedAtMs === null ? -1 : a.scrapedAtMs;
-        bVal = b.scrapedAtMs === null ? -1 : b.scrapedAtMs;
         break;
       case 'totalPoints': aVal = a.totalPts; bVal = b.totalPts; break;
       case 'topUpCost': aVal = a.totalPts; bVal = b.totalPts; break;
@@ -729,6 +707,39 @@ function updateDestToggleLabel() {
   updateSwapButtonState();
 }
 
+// ===== Filters summary (shown when collapsed) =====
+function updateFiltersSummary() {
+  var el = document.querySelector('.filters-summary');
+  if (!el) return;
+
+  var from = (document.querySelector('.from-toggle') || {}).textContent || '';
+  var to = (document.querySelector('.dest-toggle') || {}).textContent || '';
+  if (!from || from === 'Select') { el.textContent = ''; return; }
+
+  var parts = [from.trim() + ' \u2192 ' + to.trim()];
+
+  var dateStart = document.querySelector('.date-start').value;
+  var dateEnd = document.querySelector('.date-end').value;
+  if (dateStart || dateEnd) {
+    var ds = dateStart ? formatDate(dateStart) : '...';
+    var de = dateEnd ? formatDate(dateEnd) : '...';
+    parts.push(ds + ' \u2013 ' + de);
+  }
+
+  var minN = document.querySelector('.nights-min').value;
+  var maxN = document.querySelector('.nights-max').value;
+  if (minN === maxN) parts.push(minN + ' nights');
+  else parts.push(minN + '\u2013' + maxN + ' nights');
+
+  var adults = document.querySelector('.adults-count').value;
+  parts.push(adults + (adults === '1' ? ' traveller' : ' travellers'));
+
+  var cabinMin = document.querySelector('.cabin-min');
+  if (cabinMin && cabinMin.value !== 'economy') parts.push(formatCabin(cabinMin.value) + '+');
+
+  el.textContent = parts.join('  \u00B7  ');
+}
+
 // ===== Render current page of combos =====
 function render() {
   var selectedDestinations = getSelectedDestinations();
@@ -772,13 +783,6 @@ function render() {
   sortCombos(combos, ss.column, ss.direction, filters);
 
   var totalCombos = combos.length;
-  if (!filters.showOverMax) {
-    combos = combos.filter(function(c) {
-      var topUpMeta = computeTopUpMeta(c.totalPts, filters);
-      return topUpMeta.canAfford || topUpMeta.pointsNeeded === 0;
-    });
-  }
-
   var state = paginationState['_global'] || { currentPage: 1, rowsPerPage: 100 };
   paginationState['_global'] = state;
 
@@ -799,7 +803,6 @@ function render() {
   var MAX_ACCOUNTS = adults;
   var MAX_BASE = ACCOUNT_CAP * MAX_ACCOUNTS;
   var bonusMultiplier = 1 + bonusRate / 100;
-  var nowMs = Date.now();
 
   var rowsHtml = '';
   for (var i = 0; i < pageItems.length; i++) {
@@ -808,8 +811,6 @@ function render() {
     var pointsNeeded = topUpMeta.pointsNeeded;
     var baseToBuy = topUpMeta.baseToBuy;
     var canAfford = topUpMeta.canAfford;
-    var highCost = !canAfford && pointsNeeded > 0;
-    var rowClass = highCost ? ' class="high-cost-row"' : '';
 
     var topUpHtml;
     var accountsLabel = MAX_ACCOUNTS === 1 ? '1 account' : MAX_ACCOUNTS + ' accounts';
@@ -819,7 +820,7 @@ function render() {
     // Interpolate hue from 120 (green) to 0 (red)
     var barHue = Math.round(120 * (1 - costRatio));
     var barPct = Math.round(costRatio * 100);
-    var barStyle = 'background:linear-gradient(to right, hsl(' + barHue + ',70%,85%) ' + barPct + '%, transparent ' + barPct + '%);';
+    var pointsStyle = 'background:linear-gradient(to right, hsl(' + barHue + ',70%,85%) ' + barPct + '%, transparent ' + barPct + '%);';
 
     if (pointsNeeded === 0) {
       var surplus = balance - c.totalPts;
@@ -827,7 +828,7 @@ function render() {
         '\nBalance: ' + formatPoints(balance) + ' pts' +
         '\nSurplus: ' + formatPoints(surplus) + ' pts' +
         '\n\nMax purchasable: ' + formatPoints(MAX_BASE) + ' base pts across ' + accountsLabel;
-      topUpHtml = '<td class="top-up-cost" style="' + barStyle + 'color:var(--color-success);font-weight:500" title="' + escapeAttr(tooltip) + '">\u2713 Enough</td>';
+      topUpHtml = '<td class="top-up-cost" style="color:var(--color-success);font-weight:500" title="' + escapeAttr(tooltip) + '">\u2713 Enough</td>';
     } else if (!canAfford) {
       var cappedBase = MAX_BASE;
       var pointsCost = (cappedBase / 1000) * 15;
@@ -845,7 +846,7 @@ function render() {
         '\nFees: \u00A3' + fees.toFixed(2) +
         '\nTotal: \u00A3' + totalCost.toFixed(2) +
         '\nShortfall: ' + formatPoints(pointsNeeded - effectivePts) + ' pts';
-      topUpHtml = '<td class="top-up-cost" style="' + barStyle + 'color:var(--color-primary);font-weight:500" title="' + escapeAttr(tooltip) + '">\u00A3' + totalCost.toFixed(2) + '+</td>';
+      topUpHtml = '<td class="top-up-cost" style="color:var(--color-primary);font-weight:500" title="' + escapeAttr(tooltip) + '">\u00A3' + totalCost.toFixed(2) + '+</td>';
     } else {
       var numTransactions = Math.ceil(baseToBuy / ACCOUNT_CAP);
       var pointsCost = (baseToBuy / 1000) * 15;
@@ -866,7 +867,7 @@ function render() {
       tooltip += '\n\nPoints: \u00A3' + pointsCost.toFixed(2) +
         '\nFees: \u00A3' + fees.toFixed(2) +
         '\nTotal: \u00A3' + totalCost.toFixed(2);
-      topUpHtml = '<td class="top-up-cost" style="' + barStyle + '" title="' + escapeAttr(tooltip) + '">\u00A3' + totalCost.toFixed(2) + '</td>';
+      topUpHtml = '<td class="top-up-cost" title="' + escapeAttr(tooltip) + '">\u00A3' + totalCost.toFixed(2) + '</td>';
     }
 
     var routeOrigin = c.originCode || getRouteParts(c.dest).origin;
@@ -877,37 +878,24 @@ function render() {
     var remainingSeatsTooltip = 'Outbound seats: ' + (c.outSeatsDisplay || (c.outSeats === null ? 'Unknown' : String(c.outSeats))) +
       '\nInbound seats: ' + (c.inSeatsDisplay || (c.inSeats === null ? 'Unknown' : String(c.inSeats))) +
       '\nRemaining seats for return option: ' + (c.remainingSeatsDisplay || (c.remainingSeats === null ? 'Unknown' : String(c.remainingSeats)));
-    var scrapedAge = formatAgeFromNow(c.scrapedAtMs, nowMs);
-    var scrapedTooltip = 'Outbound scraped: ' + (c.outScrapedAt ? formatDateTime(c.outScrapedAt) : 'Unknown') +
-      '\nInbound scraped: ' + (c.inScrapedAt ? formatDateTime(c.inScrapedAt) : 'Unknown');
-    var cabinCombo =
-      '<span class="cabin-leg cabin-' + c.outCabin + '">' +
-        '<span class="cabin-label">' +
-          formatCabin(c.outCabin) +
-          (c.outIsSaver ? saverTagIconHtml() : '') +
-        '</span>' +
-      '</span>' +
-      '<span class="cabin-separator"> - </span>' +
-      '<span class="cabin-leg cabin-' + c.inCabin + '">' +
-        '<span class="cabin-label">' +
-          formatCabin(c.inCabin) +
-          (c.inIsSaver ? saverTagIconHtml() : '') +
-        '</span>' +
-      '</span>';
+    var outCabinHtml = '<span class="cabin-leg cabin-' + c.outCabin + '"><span class="cabin-label">' +
+      formatCabin(c.outCabin) + (c.outIsSaver ? saverTagIconHtml() : '') + '</span></span>';
+    var inCabinHtml = '<span class="cabin-leg cabin-' + c.inCabin + '"><span class="cabin-label">' +
+      formatCabin(c.inCabin) + (c.inIsSaver ? saverTagIconHtml() : '') + '</span></span>';
 
-    rowsHtml += '<tr' + rowClass + '>' +
+    rowsHtml += '<tr>' +
       '<td>' + (routeOrigin || '-') + '</td>' +
       '<td>' + (routeDestination || '-') + '</td>' +
       '<td>' + formatDate(c.depart) + '</td>' +
       '<td>' + formatDate(c.ret) + '</td>' +
       '<td>' + c.nights + '</td>' +
-      '<td>' + cabinCombo + '</td>' +
+      '<td>' + outCabinHtml + '</td>' +
+      '<td>' + inCabinHtml + '</td>' +
       '<td title="' + escapeAttr(remainingSeatsTooltip) + '">' + remainingSeatsLabel + '</td>' +
-      '<td title="' + escapeAttr(scrapedTooltip) + '">' + scrapedAge + '</td>' +
       '<td class="fees" title="Estimated taxes and carrier fees">' + formatCurrencyGBP(estFees) + '</td>' +
-      '<td class="points">' + formatPoints(c.totalPts) + '</td>' +
+      '<td class="points" style="' + pointsStyle + '">' + formatPoints(c.totalPts) + '</td>' +
       topUpHtml +
-      '<td><a href="' + searchUrl + '" target="_blank" class="external-link search-link">Search</a></td>' +
+      '<td><a href="' + searchUrl + '" target="_blank" class="external-link search-link">Go</a></td>' +
       '</tr>';
   }
 
@@ -981,6 +969,8 @@ function render() {
       h.classList.add(currentSs.direction);
     }
   });
+
+  updateFiltersSummary();
 }
 
 // ===== URL hash persistence =====
@@ -1000,10 +990,12 @@ function saveFiltersToHash() {
 
   var cabinMin = document.querySelector('.cabin-min');
   if (cabinMin) params.set('cabinMin', cabinMin.value);
-  var showOverMax = document.querySelector('.show-over-max');
-  if (showOverMax) params.set('showOverMax', showOverMax.checked ? '1' : '0');
-  var filtersCollapsed = document.querySelector('.filters-shell') && document.querySelector('.filters-shell').classList.contains('collapsed');
-  if (filtersCollapsed) params.set('filters', 'collapsed');
+  var showCostCols = document.querySelector('.show-cost-cols');
+  if (showCostCols) params.set('costCols', showCostCols.checked ? '1' : '0');
+  var filtersShellEl = document.querySelector('.filters-shell');
+  if (filtersShellEl && filtersShellEl.classList.contains('collapsed')) params.set('filters', 'collapsed');
+  var pointsShellEl = document.querySelector('.points-shell');
+  params.set('pts', pointsShellEl && pointsShellEl.classList.contains('collapsed') ? 'collapsed' : 'expanded');
 
   params.set('minN', document.querySelector('.nights-min').value);
   params.set('maxN', document.querySelector('.nights-max').value);
@@ -1048,10 +1040,17 @@ function restoreFiltersFromHash() {
     var minSelect = document.querySelector('.cabin-min');
     if (minSelect) minSelect.value = derivedMin;
   }
-  var showOverMax = params.get('showOverMax');
-  if (showOverMax !== null) {
-    var showOverMaxCb = document.querySelector('.show-over-max');
-    if (showOverMaxCb) showOverMaxCb.checked = showOverMax === '1';
+  var costColsVal = params.get('costCols');
+  if (costColsVal !== null) {
+    var showCostColsCb = document.querySelector('.show-cost-cols');
+    var rt = document.querySelector('.results-table');
+    if (costColsVal === '1') {
+      if (showCostColsCb) showCostColsCb.checked = true;
+      if (rt) rt.classList.remove('hide-cost-cols');
+    } else {
+      if (showCostColsCb) showCostColsCb.checked = false;
+      if (rt) rt.classList.add('hide-cost-cols');
+    }
   }
 
   if (params.get('minN')) document.querySelector('.nights-min').value = params.get('minN');
@@ -1067,6 +1066,17 @@ function restoreFiltersFromHash() {
     if (filtersShell) filtersShell.classList.add('collapsed');
     var filtersToggle = document.querySelector('.filters-toggle');
     if (filtersToggle) filtersToggle.setAttribute('aria-expanded', 'false');
+  }
+
+  var ptsVal = params.get('pts');
+  var pointsShell = document.querySelector('.points-shell');
+  var pointsToggle = document.querySelector('.points-toggle');
+  if (ptsVal === 'expanded') {
+    if (pointsShell) pointsShell.classList.remove('collapsed');
+    if (pointsToggle) pointsToggle.setAttribute('aria-expanded', 'true');
+  } else if (ptsVal === 'collapsed') {
+    if (pointsShell) pointsShell.classList.add('collapsed');
+    if (pointsToggle) pointsToggle.setAttribute('aria-expanded', 'false');
   }
 }
 
@@ -1163,6 +1173,7 @@ function initApp() {
   bindDestinationCheckboxEvents();
   updateFromToggleLabel();
   updateDestToggleLabel();
+  renderLastScrapeStatus();
 
   var filtersShell = document.querySelector('.filters-shell');
   var filtersToggle = document.querySelector('.filters-toggle');
@@ -1171,6 +1182,27 @@ function initApp() {
       filtersShell.classList.toggle('collapsed');
       var collapsed = filtersShell.classList.contains('collapsed');
       filtersToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      saveFiltersToHash();
+    });
+  }
+
+  var pointsShell = document.querySelector('.points-shell');
+  var pointsToggle = document.querySelector('.points-toggle');
+  if (pointsShell && pointsToggle) {
+    pointsToggle.addEventListener('click', function() {
+      pointsShell.classList.toggle('collapsed');
+      var collapsed = pointsShell.classList.contains('collapsed');
+      pointsToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      saveFiltersToHash();
+    });
+  }
+
+  var showCostColsCb = document.querySelector('.show-cost-cols');
+  var resultsTable = document.querySelector('.results-table');
+  if (showCostColsCb && resultsTable) {
+    resultsTable.classList.toggle('hide-cost-cols', !showCostColsCb.checked);
+    showCostColsCb.addEventListener('change', function() {
+      resultsTable.classList.toggle('hide-cost-cols', !showCostColsCb.checked);
       saveFiltersToHash();
     });
   }
@@ -1228,16 +1260,6 @@ function initApp() {
   document.querySelector('.date-start').addEventListener('input', invalidateAndRender);
   document.querySelector('.date-end').addEventListener('input', invalidateAndRender);
   document.querySelector('.adults-count').addEventListener('input', invalidateAndRender);
-  var showOverMaxCb = document.querySelector('.show-over-max');
-  if (showOverMaxCb) {
-    showOverMaxCb.addEventListener('change', function() {
-      if (paginationState['_global']) {
-        paginationState['_global'].currentPage = 1;
-      }
-      saveFiltersToHash();
-      render();
-    });
-  }
 
   // These only affect display, not combos
   document.querySelector('.points-balance').addEventListener('input', function() { saveFiltersToHash(); render(); });
@@ -1304,11 +1326,20 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!res.ok) return [];
         return res.json();
       })
-      .catch(function() { return []; })
+      .catch(function() { return []; }),
+    fetch('scrape-metadata.json')
+      .then(function(res) {
+        if (!res.ok) return null;
+        return res.json();
+      })
+      .catch(function() { return null; })
   ])
     .then(function(results) {
       RAW_DATA = results[0] || {};
       DESTINATIONS_META = Array.isArray(results[1]) ? results[1] : [];
+      LAST_SCRAPE_COMPLETED_AT = results[2] && typeof results[2].scrapedAt === 'string'
+        ? results[2].scrapedAt
+        : null;
       initApp();
     })
     .catch(function() {

@@ -33,7 +33,6 @@ export type MonthData = {
     minPrice?: number | null;
     currency?: string | null;
     minAwardPointsTotal?: number;
-    scrapedAt?: string;
   };
 };
 
