@@ -14,7 +14,7 @@ export function ensureDirs(): void {
 }
 
 export function getCachePath(filename: string): string {
-  return path.join(CACHE_DIR, filename);
+  return path.join(CACHE_DIR, path.basename(filename));
 }
 
 function getOutputPath(filename: string): string {

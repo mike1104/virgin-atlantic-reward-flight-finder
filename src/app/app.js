@@ -9,7 +9,7 @@ var LAST_SCRAPE_COMPLETED_AT = null;
 // ===== Utility functions =====
 function addDays(dateStr, days) {
   var d = new Date(dateStr);
-  d.setDate(d.getDate() + days);
+  d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().split('T')[0];
 }
 
@@ -19,7 +19,11 @@ function formatCabin(cabin) {
 
 function formatDate(dateStr) {
   var d = new Date(dateStr);
-  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' });
+  var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var day = d.getUTCDate();
+  var mon = months[d.getUTCMonth()];
+  var yr = String(d.getUTCFullYear()).slice(-2);
+  return (day < 10 ? '0' : '') + day + ' ' + mon + ' ' + yr;
 }
 
 function formatDateTime(dateStr) {
@@ -165,6 +169,7 @@ function populateDepartureOptions() {
     return a.localeCompare(b);
   });
 
+  var allGroupsHtml = '';
   for (var gi = 0; gi < groupNames.length; gi++) {
     var groupName = groupNames[gi];
     var groupHtml = '<div class="dest-group-label">' + escapeHtml(groupName) + '</div>';
@@ -177,8 +182,9 @@ function populateDepartureOptions() {
         '<span>' + escapeHtml(optionDef.name + ' (' + optionDef.code + ')') + '</span>' +
       '</label>';
     }
-    fromList.innerHTML += groupHtml;
+    allGroupsHtml += groupHtml;
   }
+  fromList.innerHTML = allGroupsHtml;
 }
 
 function updateFromToggleLabel() {
@@ -770,7 +776,9 @@ function render() {
     }
     var destCombos = comboCache[comboCacheKey];
     for (var ci = 0; ci < destCombos.length; ci++) {
-      var combo = destCombos[ci];
+      var src = destCombos[ci];
+      var combo = {};
+      for (var k in src) combo[k] = src[k];
       combo.dest = routeRef.routeCode;
       combo.destLabel = routeRef.routeLabel || (routeRef.originName + ' -> ' + routeRef.destinationName);
       combo.originCode = routeRef.originCode;
@@ -783,7 +791,7 @@ function render() {
   sortCombos(combos, ss.column, ss.direction, filters);
 
   var totalCombos = combos.length;
-  var state = paginationState['_global'] || { currentPage: 1, rowsPerPage: 100 };
+  var state = paginationState['_global'] || { currentPage: 1, rowsPerPage: 50 };
   paginationState['_global'] = state;
 
   var visibleCombos = combos.length;
@@ -895,7 +903,7 @@ function render() {
       '<td class="fees" title="Estimated taxes and carrier fees">' + formatCurrencyGBP(estFees) + '</td>' +
       '<td class="points" style="' + pointsStyle + '">' + formatPoints(c.totalPts) + '</td>' +
       topUpHtml +
-      '<td><a href="' + searchUrl + '" target="_blank" class="external-link search-link">Go</a></td>' +
+      '<td><a href="' + escapeAttr(searchUrl) + '" target="_blank" class="external-link search-link">Go</a></td>' +
       '</tr>';
   }
 
@@ -1303,7 +1311,7 @@ function initApp() {
   });
 
   document.querySelector('.rows-per-page').addEventListener('change', function() {
-    var state = paginationState['_global'] || { currentPage: 1, rowsPerPage: 100 };
+    var state = paginationState['_global'] || { currentPage: 1, rowsPerPage: 50 };
     state.rowsPerPage = parseInt(this.value);
     state.currentPage = 1;
     paginationState['_global'] = state;

@@ -39,6 +39,7 @@ jobs:
           path: |
             output/flights-data.json
             output/destinations.json
+            output/scrape-metadata.json
           key: flights-data-
           restore-keys: flights-data-
 
