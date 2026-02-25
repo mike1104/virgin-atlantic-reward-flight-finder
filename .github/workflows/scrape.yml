@@ -2,7 +2,7 @@ name: Scrape
 
 on:
   schedule:
-    - cron: "0 */3 * * *" # Every 3 hours
+    - cron: "0 8 */3 * *" # Every 3 days at 08:00 UTC
   workflow_dispatch: # Manual trigger
 
 permissions:
